@@ -6,7 +6,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.config import settings
-from app.services import dropbox_client, ticker_registry
+from app.services import category_routing, dropbox_client, ticker_registry
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
@@ -42,6 +42,58 @@ def list_needs_review():
     return [entry["name"] for entry in entries if not entry["is_folder"]]
 
 
+@router.get("/category-suffix-warnings")
+def list_category_suffix_warnings():
+    """
+    Lists any theme-folder suffix (e.g. ".BB") that's currently claimed by
+    more than one folder — see
+    category_routing.find_duplicate_category_suffixes() for why this
+    matters: normal suffix routing silently resolves a collision like this
+    (whichever folder is scanned last wins), so without this check, one of
+    the two folders would just permanently stop receiving anything with no
+    indication why. Meant to be polled by the frontend and shown as a
+    warning banner — this only ever returns something if a real collision
+    exists, which shouldn't happen in normal use.
+    """
+    return category_routing.find_duplicate_category_suffixes()
+
+
+@router.post("/create")
+def create_ticker(ticker: str, target_status: str):
+    """
+    Create an empty ticker folder — no files. Only meaningful use case:
+    someone drags in a whole folder with no files inside it at all, and
+    still wants the corresponding ticker folder to exist rather than the
+    drag being a silent no-op (every other ticker folder in the app gets
+    created implicitly as a side effect of a real upload; there's nothing
+    to upload here). If `ticker` already exists, this is a harmless no-op
+    — dragging an empty folder for an already-real ticker shouldn't move
+    it or do anything else surprising.
+    """
+    if target_status not in ticker_registry.STATUSES:
+        raise HTTPException(
+            status_code=400, detail=f"target_status must be one of: {', '.join(ticker_registry.STATUSES)}"
+        )
+
+    known = ticker_registry.get_known_folders()
+    if ticker in known:
+        return {"status": "already_exists", "ticker": ticker}
+
+    path = f"{ticker_registry.folder_path_for_status(target_status)}/{ticker}"
+    dropbox_client.create_folder(path)
+
+    result = {"status": "created", "ticker": ticker, "target_status": target_status}
+    # See category_routing.check_suffix_collision_for() — this is exactly
+    # the shape of case it exists for: a new ticker created with a name
+    # that happens to end in a "(.SUFFIX)" marker (e.g. dragging in a
+    # folder literally named "Total Oasis (.TO)") can collide with an
+    # existing theme folder the moment it's created.
+    suffix_warning = category_routing.check_suffix_collision_for(ticker)
+    if suffix_warning:
+        result["suffix_warning"] = suffix_warning
+    return result
+
+
 @router.get("/resolve")
 def resolve_ticker_name(name: str):
     """
@@ -75,7 +127,7 @@ def move_ticker(ticker: str, target_status: str):
     # trusting the frontend to know) so we always move from its real
     # current location, and so a request for a nonexistent ticker fails
     # clearly instead of silently creating a new empty folder.
-    known = ticker_registry.get_known_tickers()
+    known = ticker_registry.get_known_folders()
     current_status = known.get(ticker)
     if current_status is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -88,6 +140,32 @@ def move_ticker(ticker: str, target_status: str):
     return {"status": "moved", "ticker": ticker, "new_status": target_status}
 
 
+@router.post("/{ticker}/rename")
+def rename_ticker(ticker: str, new_name: str):
+    """
+    Rename a ticker or theme folder in place — same status/parent folder,
+    just a different name. Works on theme folders too (see
+    ticker_registry.get_known_folders()), specifically so a suffix
+    collision between two theme folders (or a ticker that accidentally
+    ends up claiming an already-used suffix) can be resolved from inside
+    this app — no need to go into Dropbox directly for something this
+    simple, e.g. renaming "Toronto Names (.TO)" to "Toronto Names (.TOR)".
+    """
+    if not new_name or not new_name.strip():
+        raise HTTPException(status_code=400, detail="new_name can't be empty")
+
+    known = ticker_registry.get_known_folders()
+    status = known.get(ticker)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    if new_name in known:
+        raise HTTPException(status_code=400, detail=f'"{new_name}" already exists')
+
+    base_path = ticker_registry.folder_path_for_status(status)
+    dropbox_client.move(f"{base_path}/{ticker}", f"{base_path}/{new_name}")
+    return {"status": "renamed", "old_name": ticker, "new_name": new_name}
+
+
 @router.delete("/{ticker}")
 def delete_ticker(ticker: str):
     """
@@ -97,7 +175,7 @@ def delete_ticker(ticker: str):
     ever calling this (see dropbox_client.delete()'s docstring for the
     same caveat about Dropbox's own recoverability window).
     """
-    known = ticker_registry.get_known_tickers()
+    known = ticker_registry.get_known_folders()
     status = known.get(ticker)
     if status is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")

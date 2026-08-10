@@ -57,7 +57,19 @@ def _resolve_upload(
       guessing — the caller must resubmit with `on_duplicate` set to
       "replace" (overwrite the existing file) or "keep_both" (upload
       alongside it under an auto-generated new name).
+
+    Also checks whether `folder` itself is currently involved in a suffix
+    collision (see category_routing.check_suffix_collision_for()) — if
+    so, `suffix_warning` is added to whatever's returned, so the frontend
+    can pop up an immediate, hard-to-miss warning right when it matters,
+    rather than relying only on the separate periodic banner to catch it
+    later. None in the overwhelming majority of uploads, since most
+    folder names aren't suffix-shaped at all.
     """
+    suffix_warning = category_routing.check_suffix_collision_for(folder.rsplit("/", 1)[-1])
+    if suffix_warning:
+        extra = {**extra, "suffix_warning": suffix_warning}
+
     existing = next(
         (
             entry
@@ -494,7 +506,7 @@ def list_files_for_ticker(ticker: str):
     rather than silently hiding everything inside them — see
     dropbox_client.list_folder_recursive().
     """
-    known = ticker_registry.get_known_tickers()
+    known = ticker_registry.get_known_folders()
     status = known.get(ticker)
     if status is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -510,7 +522,7 @@ def delete_ticker_file(ticker: str, filename: str, relative_path: str | None = N
     same convention as everywhere else `relative_path` is used). The
     frontend is expected to confirm with the user before ever calling
     this — see dropbox_client.delete()."""
-    known = ticker_registry.get_known_tickers()
+    known = ticker_registry.get_known_folders()
     status = known.get(ticker)
     if status is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")

@@ -45,7 +45,7 @@ function groupFiles(files) {
 // entire ticker. `status` (the ticker's status when this screen was
 // opened) is passed in from wherever the user clicked (the ticker list or
 // a search result) rather than looked up again here.
-function TickerDetail({ ticker, status, onBack }) {
+function TickerDetail({ ticker, status, onBack, onDataChanged }) {
   // Seeded from the cache so a repeat visit to a ticker already shows its
   // files immediately, before the background refetch below even resolves.
   const [files, setFiles] = useState(() => filesCache[ticker] || [])
@@ -61,6 +61,12 @@ function TickerDetail({ ticker, status, onBack }) {
   const [confirmDeleteFile, setConfirmDeleteFile] = useState(null)
   // Whether the "delete this whole ticker" confirmation is showing.
   const [confirmDeleteTicker, setConfirmDeleteTicker] = useState(false)
+  // Whether the rename input is showing, and what's currently typed into
+  // it. Works on theme folders too, not just real tickers — e.g. renaming
+  // "Toronto Names (.TO)" to resolve a suffix collision, without needing
+  // to go into Dropbox directly.
+  const [renaming, setRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState(ticker)
   // Which subfolders are currently expanded, by relative_path. Starts
   // empty and gets seeded with every subfolder once files load, so
   // everything shows expanded by default rather than requiring a click
@@ -117,10 +123,38 @@ function TickerDetail({ ticker, status, onBack }) {
     }
   }
 
+  async function handleRename() {
+    const newName = renameValue.trim()
+    if (!newName || newName === ticker) {
+      setRenaming(false)
+      setRenameValue(ticker)
+      return
+    }
+    try {
+      await api.renameTicker(ticker, newName)
+      delete filesCache[ticker]
+      // The name changed, so this screen's `ticker` prop is now stale for
+      // everything (files, cache key, etc.) — simplest correct thing is
+      // to go back to the list, which will show the new name once it
+      // refreshes. Also could be exactly what resolves a suffix
+      // collision, so let App know to re-check the warning banner.
+      onDataChanged?.()
+      onBack()
+    } catch (err) {
+      setMessage(`Rename failed: ${err.message}`)
+      setRenaming(false)
+      setRenameValue(ticker)
+    }
+  }
+
   async function handleDeleteTicker() {
     try {
       await api.deleteTicker(ticker)
       delete filesCache[ticker]
+      // Deleting a ticker could be exactly what resolves a suffix
+      // collision (if this ticker's name was the one colliding with a
+      // theme folder) — let App know to re-check the warning banner.
+      onDataChanged?.()
       // The ticker no longer exists, so there's nothing left to show —
       // go back to the list, which will naturally no longer include it
       // next time it refreshes.
@@ -155,6 +189,23 @@ function TickerDetail({ ticker, status, onBack }) {
     <div className="ticker-detail">
       <button onClick={onBack}>&larr; Back</button>
       <h2>{ticker}</h2>
+
+      {renaming ? (
+        <span>
+          <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} />
+          <button onClick={handleRename}>Save</button>{' '}
+          <button
+            onClick={() => {
+              setRenaming(false)
+              setRenameValue(ticker)
+            }}
+          >
+            Cancel
+          </button>
+        </span>
+      ) : (
+        <button onClick={() => setRenaming(true)}>Rename</button>
+      )}{' '}
 
       {STATUSES.includes(currentStatus) && (
         <>

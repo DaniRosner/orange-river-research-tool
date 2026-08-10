@@ -43,6 +43,29 @@ _LEADING_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?")
 # not just the leading one. See find_ticker_mentioned_anywhere().
 _TICKER_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?")
 
+# Matches a trailing "(.SUFFIX)" marker in a FOLDER name, e.g. "Busted
+# Biotechs (.BB)" -> captures "BB". Lives here (rather than in
+# category_routing.py, which is where it's actually *used* to register a
+# suffix) specifically so ticker_registry.py can also import it without a
+# circular dependency (category_routing.py already imports
+# ticker_registry.py) — see is_category_folder_name().
+CATEGORY_FOLDER_MARKER = re.compile(r"\(\.(\w+)\)\s*$")
+
+
+def is_category_folder_name(name: str) -> bool:
+    """
+    True if `name` (a Dropbox folder name) ends with a `(.SUFFIX)`
+    theme-folder marker — used by ticker_registry.get_known_tickers() to
+    exclude theme folders from the "known tickers" list. A theme folder
+    was never meant to be treated as a ticker, and leaving it in caused
+    real bugs: resolving an unrelated dropped folder's name against it
+    could produce a nonsensical "did you mean Toronto Names (.TO)?"
+    suggestion for something like "Total Oasis (.TO)", purely because
+    both names happen to share the literal "(.TO)" marker text — nothing
+    to do with either name actually being similar.
+    """
+    return bool(CATEGORY_FOLDER_MARKER.search(name))
+
 
 def _strip_extension(filename: str) -> str:
     """Drop the real file extension (the part after the last dot), unless

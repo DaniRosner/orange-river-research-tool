@@ -155,6 +155,13 @@ function UploadButton({ onUploaded }) {
   // few seconds after the last entry (see useAutoDismiss) — growing the
   // array restarts the clock, so it won't clear mid-batch.
   const [log, setLog] = useAutoDismiss([])
+  // A suffix-collision warning (see category_routing.check_suffix_collision_for())
+  // to show as an immediate pop-up, separate from the log — the upload or
+  // ticker-creation it's attached to already succeeded, this is purely an
+  // extra "heads up" that deserves to be hard to miss right when it
+  // happens, not buried in a log line that auto-clears in a few seconds.
+  // null = nothing to show. Stays up until explicitly dismissed.
+  const [suffixWarning, setSuffixWarning] = useState(null)
 
   function logResult(text) {
     setLog((prev) => [...prev, text])
@@ -217,6 +224,11 @@ function UploadButton({ onUploaded }) {
       }
 
       setConfirmData(null)
+      // The upload itself succeeded either way — this doesn't pause
+      // anything, it's an additional pop-up on top of the normal result.
+      if (result.suffix_warning) {
+        setSuffixWarning(result.suffix_warning)
+      }
 
       let message
       if (result.note) {
@@ -277,8 +289,25 @@ function UploadButton({ onUploaded }) {
   // every file in the folder skips per-file ticker parsing entirely.
   function startFolderQueue(items, baseOptions) {
     if (items.length === 0) {
-      logResult('That folder was empty — nothing to upload.')
-      finishBatch()
+      // Nothing to upload, but if this resolved to a genuinely new ticker
+      // (targetStatus only ever gets set for that case — an already-real
+      // ticker never needs one), still create the empty folder rather
+      // than silently doing nothing. Dragging an already-real ticker's
+      // folder with nothing in it stays a true no-op, since there's
+      // nothing to create.
+      if (baseOptions.overrideTicker && baseOptions.targetStatus) {
+        api
+          .createTicker(baseOptions.overrideTicker, baseOptions.targetStatus)
+          .then((result) => {
+            logResult(`Created an empty ticker folder for "${baseOptions.overrideTicker}" — the dropped folder had no files in it.`)
+            if (result.suffix_warning) setSuffixWarning(result.suffix_warning)
+          })
+          .catch((err) => logResult(`Couldn't create "${baseOptions.overrideTicker}": ${err.message}`))
+          .finally(finishBatch)
+      } else {
+        logResult('That folder was empty — nothing to upload.')
+        finishBatch()
+      }
       return
     }
     setFolderBaseOptions(baseOptions)
@@ -543,6 +572,17 @@ function UploadButton({ onUploaded }) {
             ))}
           </ul>
           <button onClick={handleCancelConfirm}>Cancel</button>
+        </div>
+      )}
+
+      {suffixWarning && (
+        <div className="suffix-warning-overlay">
+          <div className="suffix-warning-modal">
+            <p>
+              <strong>Heads up:</strong> {suffixWarning}
+            </p>
+            <button onClick={() => setSuffixWarning(null)}>OK</button>
+          </div>
         </div>
       )}
     </div>

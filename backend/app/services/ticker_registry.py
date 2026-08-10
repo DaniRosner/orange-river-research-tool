@@ -8,7 +8,7 @@ lives.
 
 from app.config import settings
 from app.services import dropbox_client
-from app.services.sorting import find_close_matches, find_known_ticker
+from app.services.sorting import find_close_matches, find_known_ticker, is_category_folder_name
 
 # Every valid status, and where each one's folder lives. The order here is
 # also the scan order in get_known_tickers() — if a ticker somehow exists
@@ -25,26 +25,45 @@ def _path_for_status(status: str) -> str:
     }[status]
 
 
-def get_known_tickers() -> dict[str, str]:
+def get_known_folders() -> dict[str, str]:
     """
-    Map every existing ticker name to its current status ('active',
-    'inactive', or 'historicals').
+    Map EVERY existing folder — both real tickers AND theme folders like
+    "Busted Biotechs (.BB)" — to its current status. Use this (not
+    get_known_tickers() below) for "find and manage a specific,
+    already-known folder" purposes: listing its files, deleting it,
+    moving it, renaming it. A theme folder is just as legitimate a target
+    for those as a real ticker is — someone can reasonably click into one
+    from the tab list and expect it to work.
 
-    KNOWN LIMITATION: if a ticker folder exists in more than one status
-    folder at once (this has actually happened in the real data — see the
-    `OEC` duplicate noted for the client, currently in both Active and
-    Inactive), this dict can only hold one status per ticker name, and
-    whichever status is scanned last (per STATUSES order above) silently
-    wins. That's a real gap, not a deliberate design choice — flagged
-    rather than fixed because whether that duplicate is even a mistake is
-    itself a judgment call for the client.
+    KNOWN LIMITATION: if a folder exists in more than one status folder at
+    once (this has actually happened in the real data — see the `OEC`
+    duplicate noted for the client, currently in both Active and
+    Inactive), this dict can only hold one status per name, and whichever
+    status is scanned last (per STATUSES order above) silently wins.
+    That's a real gap, not a deliberate design choice — flagged rather
+    than fixed because whether that duplicate is even a mistake is itself
+    a judgment call for the client.
     """
-    tickers: dict[str, str] = {}
+    folders: dict[str, str] = {}
     for status in STATUSES:
         for entry in dropbox_client.list_folder(_path_for_status(status)):
             if entry["is_folder"]:
-                tickers[entry["name"]] = status
-    return tickers
+                folders[entry["name"]] = status
+    return folders
+
+
+def get_known_tickers() -> dict[str, str]:
+    """
+    Same as get_known_folders(), but with theme folders (e.g. "Busted
+    Biotechs (.BB)") excluded. Use this for ticker-MATCHING purposes
+    specifically — typo-checking, resolving a candidate ticker/folder
+    name — where a theme folder being included caused real bugs: a
+    typo-check comparing an unrelated candidate against a theme folder's
+    full name could produce a nonsensical suggestion just because both
+    happened to share the same "(.SUFFIX)" marker text, not because the
+    names were actually similar.
+    """
+    return {name: status for name, status in get_known_folders().items() if not is_category_folder_name(name)}
 
 
 def folder_path_for_status(status: str) -> str:

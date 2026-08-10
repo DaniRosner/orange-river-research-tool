@@ -189,6 +189,18 @@ def upload_file(path: str, content: bytes, overwrite: bool = False) -> str:
     return metadata.name
 
 
+def create_folder(path: str) -> None:
+    """
+    Create an empty folder at `path`. Every other folder in this app gets
+    created implicitly, as a side effect of uploading a file into it
+    (`files_upload` auto-creates missing parent folders) — this is the one
+    exception, for the case where someone drags in a folder with no files
+    inside it at all and still wants the corresponding ticker folder to
+    exist (see tickers.py's `/tickers/create`)."""
+    client = get_client()
+    client.files_create_folder_v2(path)
+
+
 def move(from_path: str, to_path: str) -> None:
     """Move/rename a file or folder within Dropbox. Auto-renames on a
     naming conflict at the destination rather than failing outright."""

@@ -28,7 +28,7 @@ const FETCHERS = {
 // seconds earlier.
 const itemsCache = { Active: [], Inactive: [], Historicals: [], 'Needs Review': [] }
 
-function TickerList({ onSelectTicker, activeTab, onTabChange }) {
+function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
   // Every tab's list, keyed by tab name, seeded from the cache above so a
   // remount shows previously-loaded tabs immediately. Switching tabs reads
   // from this same object (combined with updating it in the same
@@ -73,6 +73,12 @@ function TickerList({ onSelectTicker, activeTab, onTabChange }) {
   // reason (an upload can do the same thing).
   function refreshAll() {
     TABS.forEach(refreshTab)
+    // Anything that reaches refreshAll (an upload, an assign, a delete)
+    // could have created, moved, or removed a ticker — any of which could
+    // change whether a suffix collision exists, so let App know to
+    // re-check the warning banner right away rather than waiting on its
+    // own timer.
+    onDataChanged?.()
   }
 
   // Load all four tabs once up front, so every tab already has real data

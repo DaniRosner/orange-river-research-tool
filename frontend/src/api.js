@@ -18,6 +18,11 @@ export const api = {
   getInactiveTickers: () => request('/tickers/inactive'),
   getHistoricalsTickers: () => request('/tickers/historicals'),
   getNeedsReview: () => request('/tickers/needs-review'),
+  // {suffix: [folderPath, folderPath, ...]} for any suffix claimed by more
+  // than one theme folder — normally empty. See
+  // category_routing.find_duplicate_category_suffixes() for why this
+  // matters enough to surface as a warning.
+  getCategorySuffixWarnings: () => request('/tickers/category-suffix-warnings'),
   getFilesForTicker: (ticker) => request(`/files/ticker/${encodeURIComponent(ticker)}`),
   searchFiles: (query) => request(`/files/search?q=${encodeURIComponent(query)}`),
 
@@ -66,9 +71,25 @@ export const api = {
   // resolve_ticker() for the possible `kind`s returned.
   resolveTicker: (name) => request(`/tickers/resolve?name=${encodeURIComponent(name)}`),
 
+  // Creates an empty ticker folder — no files. Used when a dropped folder
+  // turns out to have nothing inside it, so the resolved ticker still
+  // gets created rather than the drag being a silent no-op. A no-op
+  // itself if the ticker already exists.
+  createTicker: (ticker, targetStatus) =>
+    request(`/tickers/create?ticker=${encodeURIComponent(ticker)}&target_status=${targetStatus}`, {
+      method: 'POST',
+    }),
+
   // Moves a whole ticker folder between Active and Inactive in Dropbox.
   moveTicker: (ticker, targetStatus) =>
     request(`/tickers/${encodeURIComponent(ticker)}/move?target_status=${targetStatus}`, {
+      method: 'POST',
+    }),
+
+  // Renames a ticker or theme folder in place (same status, different
+  // name) — e.g. resolving a suffix collision without leaving the app.
+  renameTicker: (ticker, newName) =>
+    request(`/tickers/${encodeURIComponent(ticker)}/rename?new_name=${encodeURIComponent(newName)}`, {
       method: 'POST',
     }),
 
