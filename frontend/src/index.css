@@ -1,0 +1,68 @@
+/* Minimal, targeted styling — the app is still intentionally unstyled
+   overall (see README "Status"), but a drop target needs to actually
+   read as a box for drag-and-drop to make sense at a glance. */
+
+.dropzone {
+  margin-top: 8px;
+  padding: 28px 16px;
+  border: 1.5px dashed #b3b3b3;
+  border-radius: 8px;
+  background: #fafafa;
+  text-align: center;
+  color: #555;
+  font-size: 13.5px;
+  cursor: pointer;
+  max-width: 420px;
+}
+
+.dropzone:focus-visible {
+  outline: 2px solid #b8611f;
+  outline-offset: 2px;
+}
+
+.dropzone.is-active {
+  border-color: #b8611f;
+  border-style: solid;
+  background: #fbeee2;
+  color: #96500f;
+}
+
+.dropzone__subtext {
+  font-size: 11.5px;
+  color: #888;
+}
+
+.ticker-detail__subfolder {
+  margin-top: 4px;
+}
+
+.ticker-detail__subfolder-files {
+  margin-left: 1.5em;
+}
+
+.file-search__input-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.file-search__input-wrap input {
+  padding-right: 22px;
+}
+
+.file-search__clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  color: #888;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.file-search__clear:hover {
+  color: #333;
+}
