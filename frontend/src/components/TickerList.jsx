@@ -247,6 +247,19 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
     setItemsByTab((prev) => ({ ...prev, [tab]: next }))
   }
 
+  // The other half of a move — adds a ticker straight into the
+  // destination tab's cache so it shows up there immediately too (just
+  // the plain folder card; its real "Moved by ..." caption catches up a
+  // moment later once refreshAll()'s activity fetch resolves), instead of
+  // only appearing once the whole tab gets re-fetched from the server.
+  function addToTab(tab, item) {
+    const current = itemsCache[tab] ?? []
+    if (current.includes(item)) return
+    const next = [...current, item]
+    itemsCache[tab] = next
+    setItemsByTab((prev) => ({ ...prev, [tab]: next }))
+  }
+
   // Moves every selected ticker to `targetTab` in parallel. Uses
   // allSettled (not all) so one bad ticker doesn't stop the rest — same
   // reasoning as the upload batch queue not aborting a whole drop over one
@@ -255,6 +268,7 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
     const tickers = Array.from(selected)
     setSelected(new Set())
     removeFromTab(activeTab, tickers)
+    tickers.forEach((t) => addToTab(targetTab, t))
     const results = await Promise.allSettled(tickers.map((t) => api.moveTicker(t, targetTab.toLowerCase())))
     const failed = results.filter((r) => r.status === 'rejected').length
     setListMessage(
@@ -383,9 +397,11 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
     // Close the "⋯" menu immediately on click, same reasoning — it was
     // staying open, visibly unchanged, for the whole move request. Same
     // idea for removing it from the current tab's list right away rather
-    // than leaving it sitting there until the request finishes.
+    // than leaving it sitting there until the request finishes, and
+    // adding it to the destination tab's list right away too.
     setOpenTickerMenu(null)
     removeFromTab(activeTab, [ticker])
+    addToTab(targetTab, ticker)
     try {
       await api.moveTicker(ticker, targetTab.toLowerCase())
       setListMessage(`${ticker} moved to ${targetTab}.`)
