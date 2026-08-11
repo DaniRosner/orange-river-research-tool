@@ -89,6 +89,40 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   // list of ticker folders (see filteredItems below for why there's no
   // "date modified"/"size" option here the way the file view has).
   const [sortDir, setSortDir] = useState(() => localStorage.getItem('ticker-list-sort-dir') || 'asc')
+  // Mass-selection for bulk move/delete. Checkboxes are only ever shown
+  // while `selectionMode` is on — off by default, so the list looks
+  // exactly like it always did until the user deliberately opts in (via
+  // the toolbar's "Select items" button, or an item's own "⋯" → Select).
+  // `selected` is a Set of ticker names (or, on the Needs Review tab,
+  // filenames). Both reset on every tab switch, since a selection made on
+  // one tab has no meaning on another.
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selected, setSelected] = useState(new Set())
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+
+  useEffect(() => {
+    setSelectionMode(false)
+    setSelected(new Set())
+    setBulkDeleteConfirm(false)
+  }, [activeTab])
+
+  // Turns selection mode on, optionally pre-checking one item — used by
+  // an item's own "⋯" → Select, so picking that entry both reveals every
+  // checkbox AND starts the selection with that one item already checked.
+  function enterSelectionMode(key) {
+    setSelectionMode(true)
+    if (key != null) setSelected((prev) => new Set(prev).add(key))
+  }
+
+  // Fully backs out of selection mode — hides every checkbox again and
+  // drops whatever was selected. Distinct from "Clear selection" in the
+  // bulk-action bar, which empties the selection but leaves selection
+  // mode (and the checkboxes) on, for picking a new set right away.
+  function exitSelectionMode() {
+    setSelectionMode(false)
+    setSelected(new Set())
+    setBulkDeleteConfirm(false)
+  }
 
   function changeViewMode(mode) {
     setViewMode(mode)
@@ -182,6 +216,57 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
       if (activeTab === 'Needs Review') return 0
       return sortDir === 'asc' ? a.localeCompare(b) : b.localeCompare(a)
     })
+
+  function toggleSelect(key) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  // Selects/deselects every currently-*visible* (filtered) item — not
+  // necessarily everything loaded for this tab, matching how a filter box
+  // usually reads ("select all of what I'm looking at").
+  function toggleSelectAll() {
+    setSelected((prev) => (prev.size === filteredItems.length ? new Set() : new Set(filteredItems)))
+  }
+
+  // Moves every selected ticker to `targetTab` in parallel. Uses
+  // allSettled (not all) so one bad ticker doesn't stop the rest — same
+  // reasoning as the upload batch queue not aborting a whole drop over one
+  // failed item.
+  async function handleBulkMove(targetTab) {
+    const tickers = Array.from(selected)
+    setSelected(new Set())
+    const results = await Promise.allSettled(tickers.map((t) => api.moveTicker(t, targetTab.toLowerCase())))
+    const failed = results.filter((r) => r.status === 'rejected').length
+    setListMessage(
+      failed === 0
+        ? `${tickers.length} ticker${tickers.length === 1 ? '' : 's'} moved to ${targetTab}.`
+        : `Moved ${tickers.length - failed} of ${tickers.length} tickers to ${targetTab} (${failed} failed).`
+    )
+    refreshAll()
+  }
+
+  // Bulk-deletes whatever's selected — real tickers (and all their files)
+  // on the ticker tabs, or loose files on Needs Review.
+  async function handleBulkDelete() {
+    const keys = Array.from(selected)
+    setSelected(new Set())
+    setBulkDeleteConfirm(false)
+    const deleteOne = activeTab === 'Needs Review' ? api.deleteNeedsReviewFile : api.deleteTicker
+    const results = await Promise.allSettled(keys.map(deleteOne))
+    const failed = results.filter((r) => r.status === 'rejected').length
+    const noun = activeTab === 'Needs Review' ? 'file' : 'ticker'
+    setListMessage(
+      failed === 0
+        ? `${keys.length} ${noun}${keys.length === 1 ? '' : 's'} deleted.`
+        : `Deleted ${keys.length - failed} of ${keys.length} ${noun}s (${failed} failed).`
+    )
+    refreshAll()
+  }
 
   // Handles the initial "Assign" click (ticker comes from the typed
   // input) and every follow-up click in a confirm dialog (ticker passed
@@ -305,6 +390,14 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   function renderTickerMenu(ticker) {
     return (
       <RowMenu open={openTickerMenu === ticker} onToggle={() => setOpenTickerMenu(openTickerMenu === ticker ? null : ticker)}>
+        <button
+          onClick={() => {
+            enterSelectionMode(ticker)
+            setOpenTickerMenu(null)
+          }}
+        >
+          Select
+        </button>
         {TABS.filter((tab) => tab !== 'Needs Review' && tab !== activeTab).map((targetTab) => (
           <button key={targetTab} onClick={() => handleMoveTicker(ticker, targetTab)}>
             Move to {targetTab}
@@ -345,6 +438,16 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
           onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}
         >
           📁
+          {selectionMode && (
+            <input
+              type="checkbox"
+              className="card__select"
+              checked={selected.has(ticker)}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => toggleSelect(ticker)}
+              aria-label={`Select ${ticker}`}
+            />
+          )}
         </div>
         {renamingTicker === ticker ? (
           <div className="card__rename">
@@ -391,7 +494,8 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   // rows).
   function renderTickerTableHeader() {
     return (
-      <div className="data-table__row data-table__header">
+      <div className={`data-table__row data-table__header${selectionMode ? ' data-table__row--selecting' : ''}`}>
+        {selectionMode && <span className="data-table__select" />}
         <span className="data-table__header-cell sortable" onClick={() => changeSortDir(sortDir === 'asc' ? 'desc' : 'asc')}>
           Name{sortDir === 'asc' ? ' ▲' : ' ▼'}
         </span>
@@ -423,7 +527,17 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
       )
     }
     return (
-      <div className="data-table__row" key={ticker}>
+      <div className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}`} key={ticker}>
+        {selectionMode && (
+          <span className="data-table__select">
+            <input
+              type="checkbox"
+              checked={selected.has(ticker)}
+              onChange={() => toggleSelect(ticker)}
+              aria-label={`Select ${ticker}`}
+            />
+          </span>
+        )}
         {renamingTicker === ticker ? (
           <span className="data-table__name">
             <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} autoFocus />
@@ -472,23 +586,66 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
             </button>
           )}
         </span>
-        {activeTab !== 'Needs Review' && (
-          <div className="ticker-list__toolbar-right">
-            <select value={sortDir} onChange={(e) => changeSortDir(e.target.value)}>
-              <option value="asc">Sort: Name (A–Z)</option>
-              <option value="desc">Sort: Name (Z–A)</option>
-            </select>
-            <div className="view-toggle">
-              <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => changeViewMode('grid')}>
-                Preview
+        <div className="ticker-list__toolbar-right">
+          {filteredItems.length > 0 &&
+            (selectionMode ? (
+              <span className="ticker-list__select-all">
+                <button type="button" onClick={toggleSelectAll}>
+                  {selected.size === filteredItems.length ? 'Unselect all' : 'Select all'}
+                </button>
+                <button type="button" onClick={exitSelectionMode}>
+                  Done
+                </button>
+              </span>
+            ) : (
+              <button type="button" className="ticker-list__select-all" onClick={() => enterSelectionMode()}>
+                Select items
               </button>
-              <button className={viewMode === 'list' ? 'active' : ''} onClick={() => changeViewMode('list')}>
-                List
-              </button>
-            </div>
-          </div>
-        )}
+            ))}
+          {activeTab !== 'Needs Review' && (
+            <>
+              <select value={sortDir} onChange={(e) => changeSortDir(e.target.value)}>
+                <option value="asc">Sort: Name (A–Z)</option>
+                <option value="desc">Sort: Name (Z–A)</option>
+              </select>
+              <div className="view-toggle">
+                <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => changeViewMode('grid')}>
+                  Preview
+                </button>
+                <button className={viewMode === 'list' ? 'active' : ''} onClick={() => changeViewMode('list')}>
+                  List
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
+
+      {selected.size > 0 && (
+        <div className="bulk-action-bar">
+          <span>{selected.size} selected</span>
+          {activeTab !== 'Needs Review' &&
+            TABS.filter((tab) => tab !== 'Needs Review' && tab !== activeTab).map((targetTab) => (
+              <button key={targetTab} onClick={() => handleBulkMove(targetTab)}>
+                Move to {targetTab}
+              </button>
+            ))}
+          {bulkDeleteConfirm ? (
+            <>
+              <span>Delete {selected.size} {activeTab === 'Needs Review' ? 'files' : 'tickers'}?</span>
+              <button className="danger" onClick={handleBulkDelete}>
+                Yes, delete
+              </button>
+              <button onClick={() => setBulkDeleteConfirm(false)}>Cancel</button>
+            </>
+          ) : (
+            <button className="danger" onClick={() => setBulkDeleteConfirm(true)}>
+              Delete
+            </button>
+          )}
+          <button onClick={() => setSelected(new Set())}>Clear selection</button>
+        </div>
+      )}
 
       {listMessage && <p>{listMessage}</p>}
 
@@ -499,6 +656,14 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
           <ul>
             {filteredItems.map((filename) => (
               <li key={filename} className="file-row">
+                {selectionMode && (
+                  <input
+                    type="checkbox"
+                    checked={selected.has(filename)}
+                    onChange={() => toggleSelect(filename)}
+                    aria-label={`Select ${filename}`}
+                  />
+                )}
                 <FileThumbnail ticker={null} filename={filename} />
                 <span className="file-row__name">{filename}</span>{' '}
                 <input
@@ -519,6 +684,14 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
                     open={openFileMenu === filename}
                     onToggle={() => setOpenFileMenu(openFileMenu === filename ? null : filename)}
                   >
+                    <button
+                      onClick={() => {
+                        enterSelectionMode(filename)
+                        setOpenFileMenu(null)
+                      }}
+                    >
+                      Select
+                    </button>
                     <button
                       onClick={() => {
                         handleOpenFile(filename)

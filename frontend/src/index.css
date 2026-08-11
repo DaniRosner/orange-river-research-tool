@@ -481,6 +481,7 @@ li {
 }
 
 .card__preview {
+  position: relative;
   aspect-ratio: 3 / 4;
   background: var(--surface-alt);
   border-bottom: 1px solid var(--border);
@@ -490,6 +491,22 @@ li {
      sibling, positioned absolute) right out of view. */
   overflow: hidden;
   border-radius: var(--radius) var(--radius) 0 0;
+}
+
+/* Selection-mode checkbox, overlaid on the preview's top-left corner
+   (only rendered at all while selection mode is on) — a small opaque
+   backing so it stays legible over any thumbnail or icon color. */
+.card__select {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  background: var(--paper);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(32, 32, 32, 0.25);
+  cursor: pointer;
 }
 
 /* The ticker/folder variant — Drive's own grid view shows a plain folder
@@ -507,6 +524,10 @@ li {
   align-items: center;
   gap: 4px;
   padding: 8px 4px 8px 10px;
+}
+
+.card__select {
+  flex-shrink: 0;
 }
 
 .card__footer-text {
@@ -579,6 +600,18 @@ li {
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
+}
+
+/* Only applied while selection mode is on — adds the leading checkbox
+   column rather than reserving it permanently, so a row's layout matches
+   its idle state exactly the rest of the time. */
+.data-table__row--selecting {
+  grid-template-columns: 20px 1fr 160px 120px 90px 32px;
+}
+
+.data-table__select {
+  display: flex;
+  align-items: center;
 }
 
 .data-table__row:last-child {
@@ -766,6 +799,39 @@ li:last-child {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+}
+
+/* Selection-mode toggle in the toolbar — shared by TickerList and
+   TickerDetail, so both mass-selection entry points look the same. Idle
+   state is a single "Select items" button (this class applied directly to
+   it); active state is this class on a wrapping <span> around the
+   "Select/Unselect all" and "Done" buttons instead, hence the flex+gap
+   working for both shapes. */
+.ticker-list__select-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* The bar that appears once at least one item is selected — mass-move/
+   delete actions plus a way to back out, same visual weight as the
+   toolbars above it. */
+.bulk-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 10px 0;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.bulk-action-bar > span:first-child {
+  font-weight: 600;
 }
 
 .upload-control {

@@ -135,6 +135,36 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
   // browsing (the ticker's own root, or a subfolder — see subfolderPath).
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [newSubfolderName, setNewSubfolderName] = useState('')
+  // Mass-selection for bulk delete. Checkboxes only ever show while
+  // `selectionMode` is on — off by default, opted into via the toolbar's
+  // "Select items" button or an item's own "⋯" → Select. `selected` is a
+  // Set of keys prefixed `file:` or `folder:` (their own fileKey()/
+  // relative path), so both kinds can be selected together and told apart
+  // at delete time. All reset whenever the ticker or current subfolder
+  // changes, since a selection made at one level has no meaning at
+  // another.
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selected, setSelected] = useState(new Set())
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+
+  useEffect(() => {
+    setSelectionMode(false)
+    setSelected(new Set())
+    setBulkDeleteConfirm(false)
+  }, [ticker, subfolderPath])
+
+  // Turns selection mode on, optionally pre-checking one item — see
+  // TickerList.jsx's identical helper for why.
+  function enterSelectionMode(key) {
+    setSelectionMode(true)
+    if (key != null) setSelected((prev) => new Set(prev).add(key))
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false)
+    setSelected(new Set())
+    setBulkDeleteConfirm(false)
+  }
 
   function changeSortKey(key) {
     setSortKey(key)
@@ -230,6 +260,78 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
     } catch (err) {
       setMessage(`Failed to delete "${name}": ${err.message}`)
     }
+  }
+
+  function toggleSelect(key) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  // Selects/deselects every currently-visible (filtered) file and folder
+  // at once — `allKeys` is the combined list computed where this is
+  // called, since a folder's key needs the folder-name-to-path logic that
+  // only the render functions (with subfolderPath in scope) can build.
+  function toggleSelectAll(allKeys) {
+    setSelected((prev) => (prev.size === allKeys.length ? new Set() : new Set(allKeys)))
+  }
+
+  // Bulk-deletes every selected file and folder in parallel (allSettled,
+  // not all — one bad item shouldn't stop the rest, same reasoning as the
+  // upload batch queue). Only what actually succeeded gets removed from
+  // local state/cache; a deleted folder also removes anything that was
+  // nested inside it, same as handleDeleteFolder above.
+  async function handleBulkDelete() {
+    const keys = Array.from(selected)
+    setSelected(new Set())
+    setBulkDeleteConfirm(false)
+
+    const targets = keys.map((key) => {
+      if (key.startsWith('file:')) {
+        const fk = key.slice('file:'.length)
+        const file = files.files.find((f) => fileKey(f) === fk)
+        return {
+          type: 'file',
+          key: fk,
+          promise: file
+            ? api.deleteTickerFile(ticker, file.name, file.relative_path)
+            : Promise.reject(new Error('File not found')),
+        }
+      }
+      const path = key.slice('folder:'.length)
+      return { type: 'folder', key: path, promise: api.deleteSubfolder(ticker, path) }
+    })
+
+    const results = await Promise.allSettled(targets.map((t) => t.promise))
+    const deletedFileKeys = new Set()
+    const deletedFolderPaths = []
+    results.forEach((result, index) => {
+      if (result.status !== 'fulfilled') return
+      const target = targets[index]
+      if (target.type === 'file') deletedFileKeys.add(target.key)
+      else deletedFolderPaths.push(target.key)
+    })
+
+    const deletedFolderPrefixes = deletedFolderPaths.map((p) => `${p}/`)
+    const isInsideDeletedFolder = (relativePath) =>
+      deletedFolderPaths.includes(relativePath) || deletedFolderPrefixes.some((p) => relativePath.startsWith(p))
+
+    const next = {
+      files: files.files.filter((f) => !deletedFileKeys.has(fileKey(f)) && !isInsideDeletedFolder(f.relative_path)),
+      folders: files.folders.filter((f) => !isInsideDeletedFolder(f)),
+    }
+    filesCache[ticker] = next
+    setFiles(next)
+
+    const failed = keys.length - deletedFileKeys.size - deletedFolderPaths.length
+    setMessage(
+      failed === 0
+        ? `${keys.length} item${keys.length === 1 ? '' : 's'} deleted.`
+        : `Deleted ${keys.length - failed} of ${keys.length} items (${failed} failed).`
+    )
   }
 
   async function handleMove(targetStatus) {
@@ -333,6 +435,16 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
       <div key={`folder:${key}`} className="card">
         <div className="card__preview card__preview--icon" onClick={() => handleOpenFolder(name)}>
           📁
+          {selectionMode && (
+            <input
+              type="checkbox"
+              className="card__select"
+              checked={selected.has(`folder:${key}`)}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => toggleSelect(`folder:${key}`)}
+              aria-label={`Select ${name}`}
+            />
+          )}
         </div>
         {confirmDeleteFolder === key ? (
           <div className="card__confirm">
@@ -350,6 +462,14 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
               </span>
             </div>
             <RowMenu open={openFolderMenu === key} onToggle={() => setOpenFolderMenu(openFolderMenu === key ? null : key)}>
+              <button
+                onClick={() => {
+                  enterSelectionMode(`folder:${key}`)
+                  setOpenFolderMenu(null)
+                }}
+              >
+                Select
+              </button>
               <button
                 className="danger"
                 onClick={() => {
@@ -385,7 +505,17 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
       )
     }
     return (
-      <div key={`folder:${key}`} className="data-table__row">
+      <div key={`folder:${key}`} className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}`}>
+        {selectionMode && (
+          <span className="data-table__select">
+            <input
+              type="checkbox"
+              checked={selected.has(`folder:${key}`)}
+              onChange={() => toggleSelect(`folder:${key}`)}
+              aria-label={`Select ${name}`}
+            />
+          </span>
+        )}
         <span className="data-table__name">
           <span className="data-table__folder-icon">📁</span>
           <span className="data-table__name-text" title={name} onClick={() => handleOpenFolder(name)}>
@@ -397,6 +527,14 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
         <span className="data-table__size">—</span>
         <span className="data-table__actions">
           <RowMenu open={openFolderMenu === key} onToggle={() => setOpenFolderMenu(openFolderMenu === key ? null : key)}>
+            <button
+              onClick={() => {
+                enterSelectionMode(`folder:${key}`)
+                setOpenFolderMenu(null)
+              }}
+            >
+              Select
+            </button>
             <button
               className="danger"
               onClick={() => {
@@ -423,6 +561,16 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
       <div key={key} className="card">
         <div className="card__preview" onClick={() => handleOpenFile(file)}>
           <FileThumbnail ticker={ticker} filename={file.name} relativePath={file.relative_path} size="large" />
+          {selectionMode && (
+            <input
+              type="checkbox"
+              className="card__select"
+              checked={selected.has(`file:${key}`)}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => toggleSelect(`file:${key}`)}
+              aria-label={`Select ${file.name}`}
+            />
+          )}
         </div>
         {confirmDeleteFile === key ? (
           <div className="card__confirm">
@@ -443,6 +591,14 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
               )}
             </div>
             <RowMenu open={openFileMenu === key} onToggle={() => setOpenFileMenu(openFileMenu === key ? null : key)}>
+              <button
+                onClick={() => {
+                  enterSelectionMode(`file:${key}`)
+                  setOpenFileMenu(null)
+                }}
+              >
+                Select
+              </button>
               <button
                 onClick={() => {
                   handleOpenFile(file)
@@ -474,7 +630,8 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
     const [field, dir] = sortKey.split('-')
     const arrow = (col) => (field === col ? (dir === 'asc' ? ' ▲' : ' ▼') : '')
     return (
-      <div className="data-table__row data-table__header">
+      <div className={`data-table__row data-table__header${selectionMode ? ' data-table__row--selecting' : ''}`}>
+        {selectionMode && <span className="data-table__select" />}
         <span className="data-table__header-cell sortable" onClick={() => toggleSort('name')}>
           Name{arrow('name')}
         </span>
@@ -510,7 +667,17 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
       )
     }
     return (
-      <div key={key} className="data-table__row">
+      <div key={key} className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}`}>
+        {selectionMode && (
+          <span className="data-table__select">
+            <input
+              type="checkbox"
+              checked={selected.has(`file:${key}`)}
+              onChange={() => toggleSelect(`file:${key}`)}
+              aria-label={`Select ${file.name}`}
+            />
+          </span>
+        )}
         <span className="data-table__name">
           <FileThumbnail ticker={ticker} filename={file.name} relativePath={file.relative_path} />
           <span className="data-table__name-text" title={file.name} onClick={() => handleOpenFile(file)}>
@@ -527,6 +694,14 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
         <span className="data-table__size">{formatFileSize(file.size)}</span>
         <span className="data-table__actions">
           <RowMenu open={openFileMenu === key} onToggle={() => setOpenFileMenu(openFileMenu === key ? null : key)}>
+            <button
+              onClick={() => {
+                enterSelectionMode(`file:${key}`)
+                setOpenFileMenu(null)
+              }}
+            >
+              Select
+            </button>
             <button
               onClick={() => {
                 handleOpenFile(file)
@@ -687,6 +862,29 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
               )}
             </div>
             <div className="ticker-detail__files-toolbar-right">
+              {(filteredFolders.length > 0 || filteredFiles.length > 0) &&
+                (selectionMode ? (
+                  <span className="ticker-list__select-all">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        toggleSelectAll([
+                          ...filteredFolders.map((n) => `folder:${subfolderPath ? `${subfolderPath}/${n}` : n}`),
+                          ...filteredFiles.map((f) => `file:${fileKey(f)}`),
+                        ])
+                      }
+                    >
+                      {selected.size === filteredFolders.length + filteredFiles.length ? 'Unselect all' : 'Select all'}
+                    </button>
+                    <button type="button" onClick={exitSelectionMode}>
+                      Done
+                    </button>
+                  </span>
+                ) : (
+                  <button type="button" className="ticker-list__select-all" onClick={() => enterSelectionMode()}>
+                    Select items
+                  </button>
+                ))}
               <select value={sortKey} onChange={(e) => changeSortKey(e.target.value)}>
                 {Object.entries(SORT_OPTIONS).map(([key, { label }]) => (
                   <option key={key} value={key}>
@@ -710,6 +908,26 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
               </div>
             </div>
           </div>
+
+          {selected.size > 0 && (
+            <div className="bulk-action-bar">
+              <span>{selected.size} selected</span>
+              {bulkDeleteConfirm ? (
+                <>
+                  <span>Delete {selected.size} item{selected.size === 1 ? '' : 's'}?</span>
+                  <button className="danger" onClick={handleBulkDelete}>
+                    Yes, delete
+                  </button>
+                  <button onClick={() => setBulkDeleteConfirm(false)}>Cancel</button>
+                </>
+              ) : (
+                <button className="danger" onClick={() => setBulkDeleteConfirm(true)}>
+                  Delete
+                </button>
+              )}
+              <button onClick={() => setSelected(new Set())}>Clear selection</button>
+            </div>
+          )}
 
           {/* Subfolders always list first (alphabetically, like a ticker's
               own folder cards in TickerList), then the files sitting
