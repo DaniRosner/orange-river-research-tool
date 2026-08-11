@@ -244,20 +244,25 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
     const path = subfolderPath ? `${subfolderPath}/${name}` : name
     // Clear the confirm prompt immediately — see handleDeleteFile for why.
     setConfirmDeleteFolder(null)
+    // Remove the folder itself, and anything that was inside it at any
+    // depth (both other folders and files), from local state/cache right
+    // away — rather than waiting for the request to finish, so it
+    // disappears instantly instead of sitting there unchanged. Restored
+    // below if the delete actually failed.
+    const previous = files
+    const prefix = `${path}/`
+    const next = {
+      files: files.files.filter((f) => f.relative_path !== path && !f.relative_path.startsWith(prefix)),
+      folders: files.folders.filter((f) => f !== path && !f.startsWith(prefix)),
+    }
+    filesCache[ticker] = next
+    setFiles(next)
     try {
       await api.deleteSubfolder(ticker, path)
-      // Remove the folder itself, and anything that was inside it at any
-      // depth (both other folders and files), from local state/cache —
-      // we already know exactly what a recursive delete just removed.
-      const prefix = `${path}/`
-      const next = {
-        files: files.files.filter((f) => f.relative_path !== path && !f.relative_path.startsWith(prefix)),
-        folders: files.folders.filter((f) => f !== path && !f.startsWith(prefix)),
-      }
-      filesCache[ticker] = next
-      setFiles(next)
       setMessage(`"${name}" deleted.`)
     } catch (err) {
+      filesCache[ticker] = previous
+      setFiles(previous)
       setMessage(`Failed to delete "${name}": ${err.message}`)
     }
   }
@@ -281,9 +286,10 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
 
   // Bulk-deletes every selected file and folder in parallel (allSettled,
   // not all — one bad item shouldn't stop the rest, same reasoning as the
-  // upload batch queue). Only what actually succeeded gets removed from
-  // local state/cache; a deleted folder also removes anything that was
-  // nested inside it, same as handleDeleteFolder above.
+  // upload batch queue). Everything selected disappears from the list
+  // immediately rather than waiting for every delete to actually finish;
+  // if anything turns out to have failed, a real refetch below reconciles
+  // with the truth instead of trying to reconstruct it by hand.
   async function handleBulkDelete() {
     const keys = Array.from(selected)
     setSelected(new Set())
@@ -305,41 +311,47 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
       return { type: 'folder', key: path, promise: api.deleteSubfolder(ticker, path) }
     })
 
-    const results = await Promise.allSettled(targets.map((t) => t.promise))
-    const deletedFileKeys = new Set()
-    const deletedFolderPaths = []
-    results.forEach((result, index) => {
-      if (result.status !== 'fulfilled') return
-      const target = targets[index]
-      if (target.type === 'file') deletedFileKeys.add(target.key)
-      else deletedFolderPaths.push(target.key)
-    })
-
-    const deletedFolderPrefixes = deletedFolderPaths.map((p) => `${p}/`)
-    const isInsideDeletedFolder = (relativePath) =>
-      deletedFolderPaths.includes(relativePath) || deletedFolderPrefixes.some((p) => relativePath.startsWith(p))
-
-    const next = {
-      files: files.files.filter((f) => !deletedFileKeys.has(fileKey(f)) && !isInsideDeletedFolder(f.relative_path)),
-      folders: files.folders.filter((f) => !isInsideDeletedFolder(f)),
+    const targetFileKeys = new Set(targets.filter((t) => t.type === 'file').map((t) => t.key))
+    const targetFolderPaths = targets.filter((t) => t.type === 'folder').map((t) => t.key)
+    const targetFolderPrefixes = targetFolderPaths.map((p) => `${p}/`)
+    const isTargeted = (relativePath) =>
+      targetFolderPaths.includes(relativePath) || targetFolderPrefixes.some((p) => relativePath.startsWith(p))
+    const optimistic = {
+      files: files.files.filter((f) => !targetFileKeys.has(fileKey(f)) && !isTargeted(f.relative_path)),
+      folders: files.folders.filter((f) => !isTargeted(f)),
     }
-    filesCache[ticker] = next
-    setFiles(next)
+    filesCache[ticker] = optimistic
+    setFiles(optimistic)
 
-    const failed = keys.length - deletedFileKeys.size - deletedFolderPaths.length
-    setMessage(
-      failed === 0
-        ? `${keys.length} item${keys.length === 1 ? '' : 's'} deleted.`
-        : `Deleted ${keys.length - failed} of ${keys.length} items (${failed} failed).`
-    )
+    const results = await Promise.allSettled(targets.map((t) => t.promise))
+    const failed = results.filter((r) => r.status === 'rejected').length
+
+    if (failed === 0) {
+      setMessage(`${keys.length} item${keys.length === 1 ? '' : 's'} deleted.`)
+      return
+    }
+
+    setMessage(`Deleted ${keys.length - failed} of ${keys.length} items (${failed} failed).`)
+    try {
+      const fresh = await api.getFilesForTicker(ticker)
+      filesCache[ticker] = fresh
+      setFiles(fresh)
+    } catch {
+      // Best-effort reconciliation — if even this fails, the optimistic
+      // (slightly wrong) state stays until the next natural refetch.
+    }
   }
 
   async function handleMove(targetStatus) {
+    // Show the new status immediately rather than waiting for the move to
+    // actually finish — reverted below if it turns out to have failed.
+    const previousStatus = currentStatus
+    setCurrentStatus(targetStatus)
     try {
       await api.moveTicker(ticker, targetStatus)
-      setCurrentStatus(targetStatus)
       setMessage(`Moved to ${STATUS_LABELS[targetStatus]}.`)
     } catch (err) {
+      setCurrentStatus(previousStatus)
       setMessage(`Move failed: ${err.message}`)
     }
   }
@@ -347,18 +359,20 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
   async function handleDeleteFile(file) {
     // Clear the confirm prompt immediately, before the (async) delete call
     // below — otherwise it just sits there, visibly unchanged, for the
-    // whole network round-trip after clicking "Yes, delete."
+    // whole network round-trip after clicking "Yes, delete." Removing the
+    // file from the list right away too, instead of only after the
+    // request finishes — restored below if the delete actually failed.
     setConfirmDeleteFile(null)
+    const previous = files
+    const next = { ...files, files: files.files.filter((f) => fileKey(f) !== fileKey(file)) }
+    filesCache[ticker] = next
+    setFiles(next)
     try {
       await api.deleteTickerFile(ticker, file.name, file.relative_path)
-      // Update the list locally instead of re-fetching — we already know
-      // exactly what changed. Keep the cache in sync too, so a later
-      // revisit doesn't resurrect the deleted file for a moment.
-      const next = { ...files, files: files.files.filter((f) => fileKey(f) !== fileKey(file)) }
-      filesCache[ticker] = next
-      setFiles(next)
       setMessage(`"${file.name}" deleted.`)
     } catch (err) {
+      filesCache[ticker] = previous
+      setFiles(previous)
       setMessage(`Failed to delete "${file.name}": ${err.message}`)
     }
   }

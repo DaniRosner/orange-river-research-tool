@@ -233,6 +233,20 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
     setSelected((prev) => (prev.size === filteredItems.length ? new Set() : new Set(filteredItems)))
   }
 
+  // Optimistically removes item(s) from a tab's list right away — both
+  // the cache and the rendered state — so a move/delete/assign feels
+  // instant instead of visibly sitting there unchanged for the whole
+  // network round-trip. refreshAll() afterward (called on success *and*
+  // failure by every caller below) reconciles with the real state either
+  // way, so a wrong guess here can never leave the UI stuck out of sync —
+  // worst case it flickers back on a failure.
+  function removeFromTab(tab, itemsToRemove) {
+    const remaining = new Set(itemsToRemove)
+    const next = (itemsCache[tab] ?? []).filter((item) => !remaining.has(item))
+    itemsCache[tab] = next
+    setItemsByTab((prev) => ({ ...prev, [tab]: next }))
+  }
+
   // Moves every selected ticker to `targetTab` in parallel. Uses
   // allSettled (not all) so one bad ticker doesn't stop the rest — same
   // reasoning as the upload batch queue not aborting a whole drop over one
@@ -240,6 +254,7 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   async function handleBulkMove(targetTab) {
     const tickers = Array.from(selected)
     setSelected(new Set())
+    removeFromTab(activeTab, tickers)
     const results = await Promise.allSettled(tickers.map((t) => api.moveTicker(t, targetTab.toLowerCase())))
     const failed = results.filter((r) => r.status === 'rejected').length
     setListMessage(
@@ -256,6 +271,7 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
     const keys = Array.from(selected)
     setSelected(new Set())
     setBulkDeleteConfirm(false)
+    removeFromTab(activeTab, keys)
     const deleteOne = activeTab === 'Needs Review' ? api.deleteNeedsReviewFile : api.deleteTicker
     const results = await Promise.allSettled(keys.map(deleteOne))
     const failed = results.filter((r) => r.status === 'rejected').length
@@ -308,6 +324,7 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
         // typing "teST5" gets reported back as "Test5".
         setListMessage(`"${filename}" assigned to ${result.ticker}.`)
       }
+      removeFromTab('Needs Review', [filename])
       refreshAll()
     } catch (err) {
       setListMessage(`Failed to assign "${filename}": ${err.message}`)
@@ -333,38 +350,49 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   async function handleDeleteFile(filename) {
     // Clear the confirm prompt immediately — see TickerDetail.jsx's
     // handleDeleteFile for why (otherwise it sits there unchanged for the
-    // whole request after clicking "Yes, delete").
+    // whole request after clicking "Yes, delete"). Removing it from the
+    // list right away too, rather than waiting for the request to finish
+    // — see removeFromTab above for why, and refreshAll() below restores
+    // it if the delete actually failed.
     setConfirmDeleteFile(null)
+    removeFromTab('Needs Review', [filename])
     try {
       await api.deleteNeedsReviewFile(filename)
       setListMessage(`"${filename}" deleted.`)
       refreshAll()
     } catch (err) {
       setListMessage(`Failed to delete "${filename}": ${err.message}`)
+      refreshAll()
     }
   }
 
   async function handleDeleteTicker(ticker) {
     setConfirmDeleteTicker(null)
+    removeFromTab(activeTab, [ticker])
     try {
       await api.deleteTicker(ticker)
       setListMessage(`${ticker} deleted.`)
       refreshAll()
     } catch (err) {
       setListMessage(`Failed to delete ${ticker}: ${err.message}`)
+      refreshAll()
     }
   }
 
   async function handleMoveTicker(ticker, targetTab) {
     // Close the "⋯" menu immediately on click, same reasoning — it was
-    // staying open, visibly unchanged, for the whole move request.
+    // staying open, visibly unchanged, for the whole move request. Same
+    // idea for removing it from the current tab's list right away rather
+    // than leaving it sitting there until the request finishes.
     setOpenTickerMenu(null)
+    removeFromTab(activeTab, [ticker])
     try {
       await api.moveTicker(ticker, targetTab.toLowerCase())
       setListMessage(`${ticker} moved to ${targetTab}.`)
       refreshAll()
     } catch (err) {
       setListMessage(`Failed to move ${ticker}: ${err.message}`)
+      refreshAll()
     }
   }
 
