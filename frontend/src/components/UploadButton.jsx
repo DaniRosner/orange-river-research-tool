@@ -20,6 +20,10 @@ import { useAutoDismiss } from '../useAutoDismiss.js'
 const JUNK_NAMES = new Set(['.ds_store'])
 const JUNK_SUFFIXES = ['.lnk']
 
+// Must match ROOT_RELATIVE_PATH in backend/app/routers/files.py — see its
+// comment there for why a real empty string can't be used for this.
+const ROOT_RELATIVE_PATH = '.'
+
 function isJunkFile(name) {
   const lower = name.toLowerCase()
   return JUNK_NAMES.has(lower) || JUNK_SUFFIXES.some((suffix) => lower.endsWith(suffix))
@@ -73,27 +77,35 @@ async function readDroppedFolder(folderEntry) {
   return results
 }
 
-// Reads a drop event's contents. If it contains a folder, only the first
-// one found is used — dropping multiple folders, or a mix of folders and
-// loose files, at once isn't supported. Keeps behavior predictable rather
-// than guessing which folder should "win."
+// Reads a drop event's contents into an ordered list of "batches" — each
+// top-level folder becomes its own batch (its ticker resolved once, up
+// front, same as a single folder drop always worked), and each top-level
+// loose file becomes its own single-file batch. Dropping several folders,
+// several loose files, or a mix of both now all queue and run one after
+// another instead of only the first folder found winning and everything
+// else being silently dropped — see startBatchQueue()/advanceBatchQueue().
 async function readDroppedItems(dataTransfer) {
   const entries = Array.from(dataTransfer.items)
     .map((item) => item.webkitGetAsEntry())
     .filter(Boolean)
 
-  // A phantom directory entry with no name is the same "not really
-  // usable" signal as a phantom file — ignore it rather than treating an
-  // unnamed folder as something to resolve/upload.
-  const folderEntry = entries.find((entry) => entry.isDirectory && entry.name)
-  if (folderEntry) {
-    const items = await readDroppedFolder(folderEntry)
-    return { folderName: folderEntry.name, items }
+  const batches = []
+  for (const entry of entries) {
+    // A phantom entry with no name/content is the same "not really
+    // usable" signal whether it's a folder or a file — skip it rather
+    // than queuing a batch with nothing to actually upload.
+    if (entry.isDirectory && entry.name) {
+      const items = await readDroppedFolder(entry)
+      batches.push({ type: 'folder', folderName: entry.name, items })
+    } else if (entry.isFile) {
+      const items = []
+      await readEntry(entry, '', items)
+      if (items.length > 0) {
+        batches.push({ type: 'file', file: items[0].file, relativePath: items[0].relativePath })
+      }
+    }
   }
-
-  const items = []
-  await Promise.all(entries.filter((entry) => entry.isFile).map((entry) => readEntry(entry, '', items)))
-  return { folderName: null, items }
+  return batches
 }
 
 // Handles the upload control: click "Upload" to reveal a drop zone (for
@@ -102,7 +114,9 @@ async function readDroppedItems(dataTransfer) {
 // *folder* resolves its name to a ticker once, up front, then uploads
 // everything inside it under that ticker, preserving any subfolder
 // structure. Loose files instead go through the normal per-file sorting
-// logic (see files.py's upload endpoint) one at a time.
+// logic (see files.py's upload endpoint) one at a time. Dropping several
+// folders, several loose files, or a mix of both queues them as separate
+// batches and runs them one after another — see startBatchQueue().
 //
 // Three kinds of "the backend needs an answer before it'll file this" can
 // come back:
@@ -124,6 +138,23 @@ function UploadButton({ onUploaded }) {
   // Whether something is currently being dragged over the drop zone.
   const [isDragActive, setIsDragActive] = useState(false)
 
+  // Whole batches (a folder, or a single loose file — see
+  // readDroppedItems()) still waiting after the one currently running.
+  // Distinct from `queue` below, which is the files *within* whichever
+  // batch is currently running.
+  //
+  // A ref, deliberately NOT useState: advanceBatchQueue() is reached deep
+  // inside an async chain (submitUpload's promise, itself called from
+  // handleFolder's own await) — every function in that chain closed over
+  // whatever render was active when the drop started, so a useState value
+  // read there would still see this render's original [] even after
+  // setBatchQueue(rest) "updated" it, since that update only affects
+  // *future* renders' closures, not the ones already mid-flight. This
+  // was a real bug: two loose files dropped together silently uploaded
+  // only the first, because advanceBatchQueue() read a stale empty queue
+  // and finished the whole batch early. A ref's .current is one shared,
+  // mutable value every closure reads live, with no such staleness.
+  const batchQueueRef = useRef([])
   // Items ({file, relativePath}) still waiting after the one currently
   // showing (if any) is resolved.
   const [queue, setQueue] = useState([])
@@ -141,11 +172,21 @@ function UploadButton({ onUploaded }) {
   const [pendingOptions, setPendingOptions] = useState({})
   // For a folder batch specifically: the ticker/status resolved ONCE for
   // the whole folder (see startFolderQueue), which every file in it needs
-  // to keep using — set for the duration of the batch, cleared in
-  // finishBatch(). Kept separate from `pendingOptions`, which is per-item
+  // to keep using — set for the duration of the batch, cleared when the
+  // batch finishes. Kept separate from `pendingOptions`, which is per-item
   // and shouldn't leak into the next file (e.g. one file's "replace the
   // duplicate" answer has nothing to do with the next file's upload).
-  const [folderBaseOptions, setFolderBaseOptions] = useState(null)
+  //
+  // A ref, deliberately NOT useState — same reasoning as batchQueueRef
+  // above. startFolderQueue calls setFolderBaseOptions(baseOptions) and
+  // then, in the same synchronous call, submitUpload(first, ...) — but
+  // submitUpload is a closure from the same render as startFolderQueue,
+  // so a useState read there would still see this render's *original*
+  // value (null), not the update that was just "set." This was a real
+  // bug: every file in a dropped folder uploaded with relativePath
+  // unset, flattening any subfolder structure (e.g. NEWFOLDERCO's own
+  // "Old Models" folder) straight to the ticker's root every time.
+  const folderBaseOptionsRef = useRef(null)
   // Whichever confirmation dialog is currently showing, plus the data
   // needed to render/resolve it. `kind` is 'ticker', 'new_ticker_status',
   // or 'duplicate'. `forItems`, when set, means resolving this continues
@@ -162,6 +203,11 @@ function UploadButton({ onUploaded }) {
   // happens, not buried in a log line that auto-clears in a few seconds.
   // null = nothing to show. Stays up until explicitly dismissed.
   const [suffixWarning, setSuffixWarning] = useState(null)
+  // Free-text entry for the "New folder" choice in the choose_subfolder
+  // dialog — a name typed here doesn't need to exist yet; Dropbox creates
+  // any missing parent folder automatically on upload (see
+  // dropbox_client.upload_file()).
+  const [newFolderName, setNewFolderName] = useState('')
 
   function logResult(text) {
     setLog((prev) => [...prev, text])
@@ -171,24 +217,26 @@ function UploadButton({ onUploaded }) {
     setCurrentItem(null)
     setPendingSubject('')
     setConfirmData(null)
-    setFolderBaseOptions(null)
+    folderBaseOptionsRef.current = null
     onUploaded()
   }
 
-  // Pulls the next item off the queue and uploads it, or — if the queue
-  // is empty — finishes the batch. Continues with `folderBaseOptions` if
-  // this batch came from a folder (every file in it needs the same
+  // Pulls the next item off the current batch's queue and uploads it, or
+  // — if it's empty — the current batch (a folder, or the file-picker's
+  // flat multi-file selection) is done, so move on to whatever's next in
+  // batchQueue (see advanceBatchQueue). Continues with `folderBaseOptionsRef`
+  // if this batch came from a folder (every file in it needs the same
   // resolved ticker/status — see startFolderQueue), otherwise `{}`, same
   // as always for an ordinary loose-file batch where each file is
   // resolved independently.
   function processNext(remaining) {
     if (remaining.length === 0) {
-      finishBatch()
+      advanceBatchQueue()
       return
     }
     const [next, ...rest] = remaining
     setQueue(rest)
-    submitUpload(next, folderBaseOptions || {}, rest)
+    submitUpload(next, folderBaseOptionsRef.current || {}, rest)
   }
 
   // Uploads a single item ({file, relativePath}) with whatever options
@@ -200,7 +248,21 @@ function UploadButton({ onUploaded }) {
     setPendingSubject(item.file.name)
     setPendingOptions(options)
     try {
-      const apiOptions = item.relativePath ? { ...options, relativePath: item.relativePath } : options
+      // A folder batch's items already carry the dropped folder's own
+      // structure in `relativePath` (possibly "" for one sitting at that
+      // folder's root) — that always wins and is sent as-is, except "" is
+      // swapped for ROOT_RELATIVE_PATH (see api.js) since an empty string
+      // form field can't survive as a deliberate "root" answer (FastAPI
+      // coerces it back to "no answer" — indistinguishable from a loose
+      // file that hasn't answered choose_subfolder yet). Loose files
+      // instead rely purely on `options.relativePath`, set only once the
+      // user has actually answered that question (see
+      // handleSubfolderChoice) — `folderBaseOptionsRef` being set is
+      // exactly how "this is a folder batch" is distinguished from "this
+      // is a loose file" here.
+      const apiOptions = folderBaseOptionsRef.current
+        ? { ...options, relativePath: item.relativePath || ROOT_RELATIVE_PATH }
+        : options
       const result = await api.uploadFile(item.file, apiOptions)
 
       if (result.status === 'confirm_needed') {
@@ -220,6 +282,11 @@ function UploadButton({ onUploaded }) {
 
       if (result.status === 'ambiguous_mention') {
         setConfirmData({ kind: 'ambiguous_mention', ...result })
+        return
+      }
+
+      if (result.status === 'choose_subfolder') {
+        setConfirmData({ kind: 'choose_subfolder', ...result })
         return
       }
 
@@ -283,6 +350,51 @@ function UploadButton({ onUploaded }) {
     submitUpload(first, {}, rest)
   }
 
+  // Kicks off a drop's worth of batches (folders and/or loose files, in
+  // the order they were dragged — see readDroppedItems()). Each batch
+  // runs all the way to completion, including any confirmation dialogs it
+  // needs, before the next one starts (see advanceBatchQueue) — so
+  // dropping three folders means answering up to three "which status?"
+  // questions in turn, not all at once.
+  function startBatchQueue(batches) {
+    setLog([])
+    if (batches.length === 0) return
+    const [first, ...rest] = batches
+    batchQueueRef.current = rest
+    runBatch(first)
+  }
+
+  // Runs one batch: a whole folder (resolved once via handleFolder, same
+  // as a lone dropped folder always worked) or a single loose file (the
+  // normal per-file submitUpload path). Explicitly resets
+  // folderBaseOptionsRef/queue first — without this, a loose-file batch
+  // running right after a folder batch would incorrectly inherit the
+  // previous folder's resolved ticker and its relativePath-forcing (see
+  // submitUpload).
+  function runBatch(batch) {
+    if (batch.type === 'folder') {
+      handleFolder(batch.folderName, batch.items)
+    } else {
+      folderBaseOptionsRef.current = null
+      setQueue([])
+      submitUpload({ file: batch.file, relativePath: batch.relativePath }, {}, [])
+    }
+  }
+
+  // Called whenever a batch (a whole folder, or a single loose file) has
+  // completely finished — every file inside it uploaded (or failed) and
+  // any confirmation dialogs along the way resolved. Moves on to the next
+  // queued batch, or finishes the whole drop if that was the last one.
+  function advanceBatchQueue() {
+    if (batchQueueRef.current.length === 0) {
+      finishBatch()
+      return
+    }
+    const [next, ...rest] = batchQueueRef.current
+    batchQueueRef.current = rest
+    runBatch(next)
+  }
+
   // Starts uploading a folder's contents once its ticker is resolved
   // (matched, or confirmed by the user) — `baseOptions` already has
   // `overrideTicker` (and `targetStatus`, for a brand-new ticker) set, so
@@ -303,14 +415,14 @@ function UploadButton({ onUploaded }) {
             if (result.suffix_warning) setSuffixWarning(result.suffix_warning)
           })
           .catch((err) => logResult(`Couldn't create "${baseOptions.overrideTicker}": ${err.message}`))
-          .finally(finishBatch)
+          .finally(advanceBatchQueue)
       } else {
         logResult('That folder was empty — nothing to upload.')
-        finishBatch()
+        advanceBatchQueue()
       }
       return
     }
-    setFolderBaseOptions(baseOptions)
+    folderBaseOptionsRef.current = baseOptions
     const [first, ...rest] = items
     setQueue(rest)
     submitUpload(first, baseOptions, rest)
@@ -318,9 +430,11 @@ function UploadButton({ onUploaded }) {
 
   // Resolves a dropped/picked folder's name to a ticker before uploading
   // anything inside it — one question for the whole folder, not one per
-  // file inside it.
+  // file inside it. Called once per folder batch (see runBatch) — doesn't
+  // clear the log itself since that'd wipe out earlier batches' results
+  // when this is the 2nd+ folder in a multi-folder drop; startBatchQueue
+  // clears it once, up front, for the whole drop instead.
   async function handleFolder(folderName, items) {
-    setLog([])
     setPendingSubject(folderName)
     setCurrentItem(null)
     setPendingOptions({})
@@ -346,7 +460,7 @@ function UploadButton({ onUploaded }) {
       }
     } catch (err) {
       logResult(`Couldn't resolve folder "${folderName}": ${err.message}`)
-      finishBatch()
+      advanceBatchQueue()
     }
   }
 
@@ -371,14 +485,12 @@ function UploadButton({ onUploaded }) {
     // visibly happening.
     setIsOpen(false)
     try {
-      const { folderName, items } = await readDroppedItems(event.dataTransfer)
-      if (folderName) {
-        handleFolder(folderName, items)
-      } else if (items.length > 0) {
-        startQueue(items)
-      } else {
+      const batches = await readDroppedItems(event.dataTransfer)
+      if (batches.length === 0) {
         logResult("Couldn't read anything from that drop — try dragging directly from Finder instead.")
+        return
       }
+      startBatchQueue(batches)
     } catch (err) {
       logResult(`Couldn't read what was dropped: ${err.message}`)
     }
@@ -403,26 +515,29 @@ function UploadButton({ onUploaded }) {
   // progress. If neither is actually available, something's gone wrong
   // with our own state tracking; rather than the dialog just silently not
   // responding to clicks (confusing — looks "stuck"), clear it and say so.
+  //
+  // Clears confirmData immediately, before the (async) submit call below —
+  // otherwise the same dialog just sits there, visibly unchanged, for the
+  // whole network round-trip after a click, which reads as unresponsive.
+  // `dataAtClick` keeps the choice that was just clicked working correctly
+  // even though state clears out from under it — setConfirmData(null)
+  // doesn't affect the local `confirmData` this function already closed
+  // over.
   function resumeAfterConfirm(options) {
-    if (confirmData.forItems) {
-      startFolderQueue(confirmData.forItems, options)
+    const dataAtClick = confirmData
+    setConfirmData(null)
+    if (dataAtClick.forItems) {
+      startFolderQueue(dataAtClick.forItems, options)
     } else if (currentItem) {
       submitUpload(currentItem, options, queue)
     } else {
       logResult(`Something went wrong resuming "${pendingSubject}" — please try uploading it again.`)
-      setConfirmData(null)
     }
   }
 
   // User answered the "did you mean...?" ticker dialog.
   function handleTickerChoice(ticker) {
     resumeAfterConfirm({ ...pendingOptions, overrideTicker: ticker })
-  }
-
-  // User answered a suffix-typo dialog by choosing the theme folder it
-  // also matched, instead of a typo suggestion or a brand-new ticker.
-  function handleCategoryChoice() {
-    resumeAfterConfirm({ ...pendingOptions, confirmCategory: true })
   }
 
   // User answered the "Active or Inactive?" dialog for a brand-new ticker.
@@ -438,11 +553,27 @@ function UploadButton({ onUploaded }) {
     resumeAfterConfirm({ ...pendingOptions, onDuplicate })
   }
 
-  // User backed out of whichever dialog is showing.
+  // User answered the "where in this folder?" dialog — an existing
+  // subfolder's name, "" for the root, or a new name typed into "New
+  // folder". Only ever comes up for a single already-queued item (see
+  // _maybe_ask_subfolder's docstring for why a folder batch never reaches
+  // this), so `forItems` is never set here in practice — resumeAfterConfirm's
+  // fallback still covers it defensively, same as handleDuplicateChoice.
+  function handleSubfolderChoice(relativePath) {
+    setNewFolderName('')
+    resumeAfterConfirm({ ...pendingOptions, relativePath })
+  }
+
+  // User backed out of whichever dialog is showing. Cancelling a whole
+  // folder's ticker/status question skips just that folder and moves on
+  // to the next queued batch (if any) — same idea as cancelling a single
+  // file skipping just that file, not aborting every other file still
+  // waiting in the queue.
   function handleCancelConfirm() {
     logResult(`"${pendingSubject}" upload cancelled.`)
+    setNewFolderName('')
     if (confirmData.forItems) {
-      finishBatch()
+      advanceBatchQueue()
     } else {
       setConfirmData(null)
       processNext(queue)
@@ -455,6 +586,15 @@ function UploadButton({ onUploaded }) {
         Upload
       </button>
 
+      <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFileInputChange} />
+
+      {/* Everything below floats out over the main content instead of
+          being laid out inline — the toggle button lives in the sidebar
+          now (see Sidebar.jsx), which is nowhere near wide enough for a
+          dropzone or a multi-button confirm dialog. Always rendered (even
+          empty) so it can be positioned relative to .upload-control
+          without an extra conditional wrapper. */}
+      <div className="upload-panel">
       {isOpen && (
         <div
           className={`dropzone${isDragActive ? ' is-active' : ''}`}
@@ -484,8 +624,6 @@ function UploadButton({ onUploaded }) {
         </div>
       )}
 
-      <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFileInputChange} />
-
       {log.length > 0 && (
         <ul className="upload-log">
           {log.map((entry, index) => (
@@ -508,12 +646,6 @@ function UploadButton({ onUploaded }) {
               </li>
             ))}
           </ul>
-          {confirmData.category_folder && (
-            // The candidate also carries a suffix matching a theme
-            // folder — offer that as its own choice instead of only
-            // ever framing this as a typo.
-            <button onClick={handleCategoryChoice}>File into {confirmData.category_folder}</button>
-          )}{' '}
           <button onClick={() => handleTickerChoice(confirmData.parsed_ticker)}>
             No, create new ticker "{confirmData.parsed_ticker}"
           </button>
@@ -574,6 +706,38 @@ function UploadButton({ onUploaded }) {
           <button onClick={handleCancelConfirm}>Cancel</button>
         </div>
       )}
+
+      {confirmData && confirmData.kind === 'choose_subfolder' && (
+        <div className="confirm-dialog">
+          <p>
+            "{pendingSubject}" — where should this go in {confirmData.folder_label}?
+          </p>
+          <button onClick={() => handleSubfolderChoice(ROOT_RELATIVE_PATH)}>
+            Directly in {confirmData.folder_label}
+          </button>
+          <ul>
+            {confirmData.subfolders.map((name) => (
+              <li key={name}>
+                <button onClick={() => handleSubfolderChoice(name)}>{name}</button>
+              </li>
+            ))}
+          </ul>
+          <input
+            type="text"
+            placeholder="New folder name"
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+          />
+          <button
+            disabled={!newFolderName.trim() || newFolderName.trim() === ROOT_RELATIVE_PATH}
+            onClick={() => handleSubfolderChoice(newFolderName.trim())}
+          >
+            Create new folder
+          </button>
+          <button onClick={handleCancelConfirm}>Cancel</button>
+        </div>
+      )}
+      </div>
 
       {suffixWarning && (
         <div className="suffix-warning-overlay">

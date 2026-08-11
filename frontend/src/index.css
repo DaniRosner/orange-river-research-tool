@@ -1,62 +1,990 @@
-/* Minimal, targeted styling — the app is still intentionally unstyled
-   overall (see README "Status"), but a drop target needs to actually
-   read as a box for drag-and-drop to make sense at a glance. */
+/* Firm colors: orange (from the logo, #ff4500) and white. A persistent
+   left sidebar for navigation, a pill search bar, and a rounded elevated
+   "+ Upload" button are kept from the earlier Drive-inspired layout, but
+   the color language is now the firm's own, not Google's. */
+:root {
+  --paper: #ffffff;
+  --surface-alt: #f6f5f3;
+  --ink: #202020;
+  --ink-soft: #6b6560;
+  --border: #e5e1db;
+  --border-strong: #d1cbc2;
+  --accent: #ff4500;
+  --accent-hover: #d93a00;
+  --accent-soft: #fff0e8;
+  --accent-ink: #a83000;
+  --danger: #c0392b;
+  --danger-hover: #a5301f;
+  --danger-soft: #fbebe9;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-pill: 24px;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.app {
+  display: flex;
+  align-items: flex-start;
+  min-height: 100vh;
+}
+
+.app-loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-alt);
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  padding: 48px 40px;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(32, 32, 32, 0.1), 0 4px 12px rgba(32, 32, 32, 0.08);
+  max-width: 360px;
+}
+
+.login-card__logo {
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.login-card p {
+  color: var(--ink-soft);
+  font-size: 13.5px;
+}
+
+.login-card__button {
+  margin-top: 8px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 11px 24px;
+  border-radius: var(--radius-pill);
+}
+
+.login-card__button:hover {
+  background: var(--accent-hover);
+}
+
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  width: 250px;
+  flex-shrink: 0;
+  min-height: 100vh;
+  background: var(--paper);
+  border-right: 1px solid var(--border);
+  padding: 32px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.sidebar__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.sidebar__logo {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.sidebar__welcome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.sidebar__logout {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  text-decoration: underline;
+}
+
+.sidebar__logout:hover {
+  background: none;
+  color: var(--accent);
+}
+
+.sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar__nav-item {
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 11px 18px;
+  border-radius: 0 20px 20px 0;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+
+.sidebar__nav-item:hover {
+  background: var(--surface-alt);
+}
+
+.sidebar__nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+/* ---------- Main content ---------- */
+
+.app__main {
+  flex: 1;
+  min-width: 0;
+  padding: 40px 48px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.list-view {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+p {
+  margin: 0;
+}
+
+/* Status/loading/message text — anywhere a fetch-in-flight or result
+   message shows up, it should read as quiet and secondary, not like body
+   content. */
+.ticker-list > p,
+.ticker-detail > p,
+.file-search > p {
+  color: var(--ink-soft);
+  font-size: 13px;
+  margin: 4px 0;
+}
+
+.ticker-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.ticker-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ticker-detail__rename,
+.ticker-detail__confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ticker-detail__files {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+}
+
+.ticker-detail__files-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ticker-detail__files-toolbar input[type='text'] {
+  max-width: 260px;
+}
+
+.ticker-detail__files-toolbar-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ticker-detail__new-folder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ticker-detail__new-folder input[type='text'] {
+  max-width: 180px;
+}
+
+.ticker-detail__files-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+select {
+  font-family: inherit;
+  font-size: 13.5px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+select:focus,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.view-toggle {
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.view-toggle button {
+  border: none;
+  border-radius: 0;
+  background: var(--paper);
+}
+
+.view-toggle button + button {
+  border-left: 1px solid var(--border-strong);
+}
+
+.view-toggle button.active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+button {
+  font-family: inherit;
+  font-size: 13.5px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s;
+}
+
+button:hover {
+  background: var(--surface-alt);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+button.danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+input[type='text'] {
+  font-family: inherit;
+  font-size: 13.5px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+input[type='text']:focus,
+input[type='text']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+li {
+  padding: 10px 10px;
+  font-size: 13.5px;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.file-row__name {
+  flex: 1;
+}
+
+.file-row__meta {
+  font-size: 11px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.file-thumbnail {
+  flex-shrink: 0;
+  object-fit: cover;
+  /* Document previews are tall/portrait, and real content (text) sits
+     left-aligned near the top — a horizontally-centered crop (the
+     default for object-fit: cover) usually lands on blank right-margin
+     whitespace instead, making a small thumbnail look empty even though
+     it loaded correctly. Anchoring top-left actually catches the text. */
+  object-position: left top;
+  background: var(--surface-alt);
+}
+
+/* Needs Review's list rows — a compact icon-sized thumbnail. */
+.file-thumbnail--small {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+/* The ticker file grid — a real preview-card image, tall/portrait like an
+   actual document page rather than a small square icon. */
+.file-thumbnail--large {
+  width: 100%;
+  height: 100%;
+}
+
+.file-thumbnail--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+
+.file-thumbnail--fallback.file-thumbnail--large {
+  font-size: 32px;
+}
+
+/* ---------- File grid (ticker detail — Drive/Docs-style preview cards) ---------- */
+
+/* Shared by both the ticker grid and the file grid — Drive itself uses
+   the same card/grid system for folders and files, just with a different
+   preview inside, so this does too (see .card__preview--icon below for
+   the ticker/folder variant). auto-fill + minmax means the column count
+   adjusts on its own as the viewport changes — no separate mobile/desktop
+   breakpoints needed. */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 20px;
+  width: 100%;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--paper);
+  transition: box-shadow 0.12s, border-color 0.12s;
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 1px 3px rgba(32, 32, 32, 0.12), 0 4px 10px rgba(32, 32, 32, 0.08);
+}
+
+.card__preview {
+  aspect-ratio: 3 / 4;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  /* Clips just the preview to the card's rounded top corners — kept off
+     .card itself, since that would also clip the "⋯" menu's dropdown (a
+     sibling, positioned absolute) right out of view. */
+  overflow: hidden;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+/* The ticker/folder variant — Drive's own grid view shows a plain folder
+   icon for folders, not a peek at their contents, so this does too
+   (simpler, and doesn't need to fetch anything to render). */
+.card__preview--icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+}
+
+.card__footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px 8px 10px;
+}
+
+.card__footer-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.card__name {
+  min-width: 0;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.card__meta {
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card__confirm {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card__confirm p {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.card__rename {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 10px;
+}
+
+.card__rename input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- Data table (ticker detail file list + ticker list, List view) ---------- */
+
+/* Copies Google Drive's own list-view columns: Name / Owner / Date
+   modified / File size, plus a trailing menu column. Built as CSS Grid
+   rows rather than a real <table> — a fixed grid-template-columns gives
+   precise per-cell ellipsis control without table-layout's width quirks,
+   and every row (data or a confirm/rename takeover) can share one class. */
+.data-table {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.data-table__row {
+  display: grid;
+  grid-template-columns: 1fr 160px 120px 90px 32px;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.data-table__row:last-child {
+  border-bottom: none;
+}
+
+.data-table__row:not(.data-table__header):not(.data-table__row--confirm):hover {
+  background: var(--accent-soft);
+}
+
+.data-table__header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--border-strong);
+  padding-top: 0;
+  padding-bottom: 8px;
+}
+
+.data-table__header-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-table__header-cell.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.data-table__header-cell.sortable:hover {
+  color: var(--ink);
+}
+
+.data-table__row--confirm {
+  grid-template-columns: 1fr;
+}
+
+.data-table__name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Same 32px footprint as .file-thumbnail--small (the file rows' own icon)
+   so a folder row's name lines up with the file names below/above it,
+   instead of starting further left just because an emoji glyph is
+   narrower than a thumbnail box. */
+.data-table__folder-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.data-table__name-text {
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-table__owner,
+.data-table__modified {
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-table__size {
+  color: var(--ink-soft);
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* A thin divider between rows in an actual file list (ticker detail, Needs
+   Review) — ticker rows deliberately stay divider-free, relying on hover
+   only, per the flatter Drive-style look chosen for that list. */
+li:not(.ticker-row) {
+  border-bottom: 1px solid var(--border);
+}
+
+li:last-child {
+  border-bottom: none;
+}
+
+/* A ticker row (as opposed to a Needs Review file row, a confirm-dialog
+   choice, etc. — all also plain <li>s) shows a folder icon and, unlike
+   those others, has one part of it (the name) clickable — the row itself
+   also holds a "⋯" delete menu now (see RowMenu in TickerList.jsx), so
+   only the name span is the click target, not the whole row. */
+.ticker-row {
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ticker-row::before {
+  content: '📁';
+  font-size: 15px;
+}
+
+.ticker-row:hover {
+  background: var(--accent-soft);
+}
+
+.ticker-row__name {
+  cursor: pointer;
+  flex: 1;
+}
+
+.ticker-row__rename {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ticker-row__rename input {
+  flex: 1;
+}
+
+.ticker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.ticker-list__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.ticker-list__toolbar input[type='text'] {
+  max-width: 260px;
+  padding-right: 28px;
+}
+
+.ticker-list__filter-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ticker-list__filter-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.ticker-list__filter-clear:hover {
+  background: none;
+  color: var(--ink);
+}
+
+.ticker-list__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.upload-control {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.upload-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.upload-toggle {
+  border-radius: var(--radius-pill);
+  padding: 11px 24px 11px 20px;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(32, 32, 32, 0.12), 0 1px 3px rgba(32, 32, 32, 0.08);
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.upload-toggle::before {
+  content: '+ ';
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.upload-toggle:hover {
+  box-shadow: 0 1px 3px rgba(32, 32, 32, 0.16), 0 4px 8px rgba(32, 32, 32, 0.1);
+  background: var(--paper);
+}
+
+/* The ticker-detail header when browsing inside a subfolder — clickable
+   ancestor segments (jump straight to that level) plus the current
+   segment as plain text, same idea as Drive's own breadcrumb trail. */
+.ticker-detail__breadcrumb {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.breadcrumb-link {
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+
+.breadcrumb-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.row-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.row-menu__trigger {
+  border: none;
+  background: none;
+  padding: 4px 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--ink-soft);
+}
+
+.row-menu__trigger:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+  border-radius: 50%;
+}
+
+.row-menu__items {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 10;
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  box-shadow: 0 1px 3px rgba(32, 32, 32, 0.16), 0 4px 8px rgba(32, 32, 32, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+  white-space: nowrap;
+}
+
+.row-menu__items button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+}
+
+.row-menu__items button:hover {
+  background: var(--surface-alt);
+}
+
+.row-menu__items button.danger:hover {
+  background: var(--danger);
+}
+
+.confirm-dialog {
+  margin-top: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  max-width: 480px;
+}
+
+.confirm-dialog p {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+}
+
+.confirm-dialog ul {
+  margin: 0 0 10px;
+}
+
+.confirm-dialog li {
+  padding: 3px 0;
+}
+
+/* A drop target needs to actually read as a box for drag-and-drop to make
+   sense at a glance. */
 
 .dropzone {
-  margin-top: 8px;
-  padding: 28px 16px;
-  border: 1.5px dashed #b3b3b3;
-  border-radius: 8px;
-  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 142px;
+  padding: 32px 18px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
   text-align: center;
-  color: #555;
+  color: var(--ink-soft);
   font-size: 13.5px;
   cursor: pointer;
   max-width: 420px;
 }
 
 .dropzone:focus-visible {
-  outline: 2px solid #b8611f;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.dropzone.is-active {
-  border-color: #b8611f;
-  border-style: solid;
-  background: #fbeee2;
-  color: #96500f;
-}
+/* Deliberately no distinct look for the drag-active state — it matches
+   the idle dropzone exactly. The "Drop to upload" text swap (see
+   UploadButton.jsx) is what signals the state change; restyling the box
+   itself on top of that read as an unnecessary, jarring color flash. */
 
 .dropzone__subtext {
   font-size: 11.5px;
-  color: #888;
+  color: var(--ink-soft);
 }
 
-.ticker-detail__subfolder {
-  margin-top: 4px;
+.file-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.ticker-detail__subfolder-files {
-  margin-left: 1.5em;
+.file-search form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .file-search__input-wrap {
   position: relative;
   display: inline-block;
+  flex: 1;
+  max-width: 480px;
+}
+
+.file-search__input-wrap::before {
+  content: '🔍';
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+  pointer-events: none;
 }
 
 .file-search__input-wrap input {
-  padding-right: 22px;
+  width: 100%;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  background: var(--surface-alt);
+  padding: 10px 32px 10px 40px;
+}
+
+.file-search__input-wrap input:focus,
+.file-search__input-wrap input:focus-visible {
+  background: var(--paper);
+  border-color: var(--border);
+  outline: none;
+  box-shadow: 0 1px 3px rgba(32, 32, 32, 0.16);
 }
 
 .file-search__clear {
   position: absolute;
-  right: 4px;
+  right: 10px;
   top: 50%;
   transform: translateY(-50%);
   border: none;
   background: none;
-  color: #888;
+  color: var(--ink-soft);
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
@@ -64,14 +992,26 @@
 }
 
 .file-search__clear:hover {
-  color: #333;
+  background: none;
+  color: var(--ink);
+}
+
+.file-search form button[type='submit'] {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.file-search form button[type='submit']:hover {
+  background: var(--accent-soft);
 }
 
 .category-suffix-warning {
-  margin: 8px 0;
-  padding: 10px 14px;
+  margin: 0;
+  padding: 12px 16px;
   border: 1.5px solid #d9822b;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: #fff8ef;
   color: #7a4a0a;
   font-size: 13.5px;
@@ -98,10 +1038,10 @@
 }
 
 .suffix-warning-modal {
-  background: #fff;
+  background: var(--paper);
   border: 2px solid #d9822b;
-  border-radius: 8px;
-  padding: 20px 24px;
+  border-radius: var(--radius);
+  padding: 22px 26px;
   max-width: 460px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }

@@ -1,16 +1,20 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { useAutoDismiss } from '../useAutoDismiss.js'
-import UploadButton from './UploadButton.jsx'
+import { describeActivity } from '../activityLabels.js'
+import { formatDate } from '../formatters.js'
+import RowMenu from './RowMenu.jsx'
+import FileThumbnail from './FileThumbnail.jsx'
+import { TABS } from '../tabSlugs.js'
 
-const TABS = ['Active', 'Inactive', 'Historicals', 'Needs Review']
-
-// The main list view: the three tabs, the upload button, a name filter,
-// and — importantly — two very different kinds of list depending on the
-// tab. Active/Inactive show clickable tickers (folders). Needs Review
-// shows individual loose files, each with its own inline "assign to a
-// ticker" control instead of being clickable, since a Needs Review item
-// isn't a ticker you can open — it's a file waiting to be filed into one.
+// The main list view: a name filter plus two very different kinds of list
+// depending on the tab. Active/Inactive show clickable tickers (folders).
+// Needs Review shows individual loose files, each with its own inline
+// "assign to a ticker" control instead of being clickable, since a Needs
+// Review item isn't a ticker you can open — it's a file waiting to be
+// filed into one. The tabs themselves and the upload control live in
+// Sidebar now, not here — this component only owns what's shown for
+// whichever tab is currently active.
 const FETCHERS = {
   Active: api.getActiveTickers,
   Inactive: api.getInactiveTickers,
@@ -26,23 +30,32 @@ const FETCHERS = {
 // remounted TickerList with an empty cache and had to refetch all four
 // tabs before showing anything, even for a tab that had just been loaded
 // seconds earlier.
-const itemsCache = { Active: [], Inactive: [], Historicals: [], 'Needs Review': [] }
+//
+// Starts as `null` per tab, not `[]` — same reasoning as TickerDetail's
+// `loading` state: a real "hasn't loaded yet" needs to read differently
+// from "loaded and genuinely has nothing in it," otherwise a first-ever
+// visit to a tab renders as a blank list with zero feedback rather than
+// "still loading."
+const itemsCache = { Active: null, Inactive: null, Historicals: null, 'Needs Review': null }
 
-function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
+function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }) {
   // Every tab's list, keyed by tab name, seeded from the cache above so a
-  // remount shows previously-loaded tabs immediately. Switching tabs reads
-  // from this same object (combined with updating it in the same
-  // synchronous click, see `selectTab` below), which is what stops a tab
-  // switch from ever painting a frame with the new tab's label but the
-  // old tab's items still showing.
+  // remount shows previously-loaded tabs immediately. Switching tabs (via
+  // Sidebar navigating to a new URL, which changes the `activeTab` prop)
+  // reads straight from this same object, already populated ahead of time
+  // by the mount effect below — which is what stops a tab switch from
+  // ever painting a frame with the new tab's label but the old tab's
+  // items still showing.
   const [itemsByTab, setItemsByTab] = useState(() => ({ ...itemsCache }))
+  // `null` while this tab hasn't loaded yet (see itemsCache above), a real
+  // array once it has (possibly empty).
   const items = itemsByTab[activeTab]
   const [filter, setFilter] = useState('')
   // What's currently typed into each Needs Review row's ticker box, keyed
   // by filename (so every row remembers its own input independently).
   const [assignTicker, setAssignTicker] = useState({})
   // Auto-clears itself a few seconds after being set — see useAutoDismiss.
-  const [assignMessage, setAssignMessage] = useAutoDismiss('')
+  const [listMessage, setListMessage] = useAutoDismiss('')
   // Holds the "did you mean...?" suggestion data for whichever Needs
   // Review row(s) currently need it, keyed by filename — a plain object
   // rather than a single value because in principle more than one row
@@ -51,6 +64,47 @@ function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
   // Which Needs Review filename (if any) currently has its "really delete
   // this?" confirmation showing.
   const [confirmDeleteFile, setConfirmDeleteFile] = useState(null)
+  // Which Needs Review filename (if any) currently has its "⋯" options
+  // menu open.
+  const [openFileMenu, setOpenFileMenu] = useState(null)
+  // Same idea, for a ticker row's own "⋯" menu (Active/Inactive/
+  // Historicals tabs) — lets a ticker be moved, renamed, or deleted
+  // straight from the list, without having to click into its detail page
+  // first. TickerDetail keeps its own separate controls for all three too
+  // (see TickerDetail.jsx) — this is an additional entry point to the
+  // same actions, not a replacement.
+  const [confirmDeleteTicker, setConfirmDeleteTicker] = useState(null)
+  const [openTickerMenu, setOpenTickerMenu] = useState(null)
+  // Which ticker (if any) is currently showing its rename input, and what
+  // that input currently holds.
+  const [renamingTicker, setRenamingTicker] = useState(null)
+  const [renameValue, setRenameValue] = useState('')
+  // 'grid' (Drive-style folder-icon cards) or 'list' — same idea as
+  // TickerDetail's own view toggle, remembered the same way. Only ever
+  // used for the ticker tabs — Needs Review stays list-only, since it's a
+  // triage workflow (inline assign controls per row), not something a
+  // folder-icon grid fits.
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem('ticker-list-view-mode') || 'grid')
+  // 'asc' or 'desc' — the only sort that's actually well-defined for a
+  // list of ticker folders (see filteredItems below for why there's no
+  // "date modified"/"size" option here the way the file view has).
+  const [sortDir, setSortDir] = useState(() => localStorage.getItem('ticker-list-sort-dir') || 'asc')
+
+  function changeViewMode(mode) {
+    setViewMode(mode)
+    localStorage.setItem('ticker-list-view-mode', mode)
+  }
+
+  function changeSortDir(dir) {
+    setSortDir(dir)
+    localStorage.setItem('ticker-list-sort-dir', dir)
+  }
+
+  // Who last created/renamed/moved/deleted each ticker *through this
+  // app* — see backend/app/services/activity_log.py for why this isn't
+  // just Dropbox's own "modified by". Refreshed alongside the tab data
+  // below (same triggers: anything that could actually change it).
+  const [tickerActivity, setTickerActivity] = useState({})
 
   // Re-fetches one tab's list into the cache — both the module-level copy
   // (so it survives an unmount) and component state (so it re-renders).
@@ -73,6 +127,7 @@ function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
   // reason (an upload can do the same thing).
   function refreshAll() {
     TABS.forEach(refreshTab)
+    api.getTickerActivity().then(setTickerActivity).catch(() => {})
     // Anything that reaches refreshAll (an upload, an assign, a delete)
     // could have created, moved, or removed a ticker — any of which could
     // change whether a suffix collision exists, so let App know to
@@ -85,21 +140,48 @@ function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
   // sitting in the cache before the user ever clicks on it.
   useEffect(refreshAll, [])
 
-  // Switching tabs reads straight from the cache (already populated by
-  // the effect above), so the very same render that shows the new tab's
-  // label also shows that tab's real items — no frame in between where
-  // the label says one tab but the list still belongs to the last one.
-  // A background refetch is kicked off too, in case something changed in
-  // Dropbox since the cache was last filled; the visible list doesn't
-  // change until that resolves, so it can't cause a flash either.
-  function selectTab(tab) {
-    onTabChange(tab)
-    refreshTab(tab)
-  }
+  // Switching tabs (now driven by Sidebar navigating to a new URL, which
+  // changes the `activeTab` prop) reads straight from the cache (already
+  // populated by the effect above), so the very same render that shows
+  // the new tab's label also shows that tab's real items — no frame in
+  // between where the label says one tab but the list still belongs to
+  // the last one. A background refetch of just that tab is kicked off
+  // too, in case something changed in Dropbox since the cache was last
+  // filled; the visible list doesn't change until that resolves, so it
+  // can't cause a flash either. Also fires once on mount (redundant with
+  // the effect above for whichever tab starts active) — harmless, not
+  // worth adding extra state just to skip it.
+  useEffect(() => {
+    refreshTab(activeTab)
+  }, [activeTab])
+
+  // The "+ New" upload control lives in Sidebar now, outside this
+  // component, so it can't call refreshAll() directly the way it could
+  // when it was rendered as a child here. This is how it reaches back in:
+  // App bumps `refreshTrigger` after an upload completes, and this effect
+  // catches that change. Guarded on `!= null` so the initial render
+  // (before any upload has ever happened) doesn't trigger a redundant
+  // refetch on top of the mount effect above.
+  useEffect(() => {
+    if (refreshTrigger != null) refreshAll()
+  }, [refreshTrigger])
 
   // Client-side-only filter on the names already loaded for this tab —
   // NOT the same thing as FileSearch's real cross-ticker file search.
-  const filteredItems = items.filter((item) => item.toLowerCase().includes(filter.toLowerCase()))
+  // `items` is null while this tab's first load is still in flight (see
+  // itemsCache) — filteredItems stays empty in that case, and the render
+  // below shows a loading message instead of the (empty) list. Tickers
+  // (not Needs Review — those are files, sorted separately if ever
+  // needed) are sorted alphabetically: Dropbox's own listing order isn't
+  // guaranteed to be alphabetical, and folders don't carry a meaningful
+  // "date modified" the way files do, so this is the one sort that's both
+  // free and actually well-defined for a list of ticker folders.
+  const filteredItems = (items ?? [])
+    .filter((item) => item.toLowerCase().includes(filter.toLowerCase()))
+    .sort((a, b) => {
+      if (activeTab === 'Needs Review') return 0
+      return sortDir === 'asc' ? a.localeCompare(b) : b.localeCompare(a)
+    })
 
   // Handles the initial "Assign" click (ticker comes from the typed
   // input) and every follow-up click in a confirm dialog (ticker passed
@@ -111,75 +193,314 @@ function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
   async function handleAssign(filename, ticker, options = {}) {
     const targetTicker = (ticker ?? assignTicker[filename] ?? '').trim()
     if (!targetTicker) return
+    // Clear any confirm dialog already showing for this file immediately
+    // — this is a no-op on a first-ever assign attempt (nothing to
+    // clear), but on a resubmission (clicking a suggestion inside the
+    // dialog) it stops the same dialog sitting there unchanged for the
+    // whole request.
+    setConfirmState((prev) => {
+      const next = { ...prev }
+      delete next[filename]
+      return next
+    })
     try {
       const result = await api.assignNeedsReviewFile(filename, targetTicker, options)
 
       if (result.status === 'confirm_needed' || result.status === 'new_ticker_needs_status') {
-        setConfirmState({ ...confirmState, [filename]: { kind: result.status, ...result } })
+        setConfirmState((prev) => ({ ...prev, [filename]: { kind: result.status, ...result } }))
         return
       }
 
-      setConfirmState((prev) => {
-        const next = { ...prev }
-        delete next[filename]
-        return next
-      })
       // "assigned_category" means the typed value ended with a registered
       // category suffix (e.g. ".BB") and got routed straight into that
       // themed folder — see category_routing.py — rather than becoming a
       // normal ticker.
       if (result.status === 'assigned_category') {
-        setAssignMessage(`"${filename}" filed into ${result.category_folder}.`)
+        setListMessage(`"${filename}" filed into ${result.category_folder}.`)
       } else {
         // Show the ticker the backend actually filed it under (its real
         // stored casing), not necessarily whatever was typed — e.g.
         // typing "teST5" gets reported back as "Test5".
-        setAssignMessage(`"${filename}" assigned to ${result.ticker}.`)
+        setListMessage(`"${filename}" assigned to ${result.ticker}.`)
       }
       refreshAll()
     } catch (err) {
-      setAssignMessage(`Failed to assign "${filename}": ${err.message}`)
+      setListMessage(`Failed to assign "${filename}": ${err.message}`)
     }
   }
 
+  // Opens a Needs Review file in Dropbox's own preview UI in a new tab —
+  // see TickerDetail.jsx's handleOpenFile for why the tab is opened
+  // synchronously before the (async) link request resolves.
+  function handleOpenFile(filename) {
+    const tab = window.open('', '_blank')
+    api
+      .getOpenLink(null, filename)
+      .then(({ url }) => {
+        if (tab) tab.location = url
+      })
+      .catch((err) => {
+        if (tab) tab.close()
+        setListMessage(`Couldn't open "${filename}": ${err.message}`)
+      })
+  }
+
   async function handleDeleteFile(filename) {
+    // Clear the confirm prompt immediately — see TickerDetail.jsx's
+    // handleDeleteFile for why (otherwise it sits there unchanged for the
+    // whole request after clicking "Yes, delete").
+    setConfirmDeleteFile(null)
     try {
       await api.deleteNeedsReviewFile(filename)
-      setAssignMessage(`"${filename}" deleted.`)
+      setListMessage(`"${filename}" deleted.`)
       refreshAll()
     } catch (err) {
-      setAssignMessage(`Failed to delete "${filename}": ${err.message}`)
-    } finally {
-      setConfirmDeleteFile(null)
+      setListMessage(`Failed to delete "${filename}": ${err.message}`)
     }
+  }
+
+  async function handleDeleteTicker(ticker) {
+    setConfirmDeleteTicker(null)
+    try {
+      await api.deleteTicker(ticker)
+      setListMessage(`${ticker} deleted.`)
+      refreshAll()
+    } catch (err) {
+      setListMessage(`Failed to delete ${ticker}: ${err.message}`)
+    }
+  }
+
+  async function handleMoveTicker(ticker, targetTab) {
+    // Close the "⋯" menu immediately on click, same reasoning — it was
+    // staying open, visibly unchanged, for the whole move request.
+    setOpenTickerMenu(null)
+    try {
+      await api.moveTicker(ticker, targetTab.toLowerCase())
+      setListMessage(`${ticker} moved to ${targetTab}.`)
+      refreshAll()
+    } catch (err) {
+      setListMessage(`Failed to move ${ticker}: ${err.message}`)
+    }
+  }
+
+  async function handleRenameTicker(ticker) {
+    const newName = renameValue.trim()
+    if (!newName || newName === ticker) {
+      setRenamingTicker(null)
+      return
+    }
+    setRenamingTicker(null)
+    try {
+      await api.renameTicker(ticker, newName)
+      setListMessage(`${ticker} renamed to ${newName}.`)
+      refreshAll()
+    } catch (err) {
+      setListMessage(`Failed to rename ${ticker}: ${err.message}`)
+    }
+  }
+
+  // Shared between renderTickerCard and renderTickerListRow below — same
+  // three actions (move/rename/delete) regardless of which view is
+  // showing.
+  function renderTickerMenu(ticker) {
+    return (
+      <RowMenu open={openTickerMenu === ticker} onToggle={() => setOpenTickerMenu(openTickerMenu === ticker ? null : ticker)}>
+        {TABS.filter((tab) => tab !== 'Needs Review' && tab !== activeTab).map((targetTab) => (
+          <button key={targetTab} onClick={() => handleMoveTicker(ticker, targetTab)}>
+            Move to {targetTab}
+          </button>
+        ))}
+        <button
+          onClick={() => {
+            setRenamingTicker(ticker)
+            setRenameValue(ticker)
+            setOpenTickerMenu(null)
+          }}
+        >
+          Rename
+        </button>
+        <button
+          className="danger"
+          onClick={() => {
+            setConfirmDeleteTicker(ticker)
+            setOpenTickerMenu(null)
+          }}
+        >
+          Delete
+        </button>
+      </RowMenu>
+    )
+  }
+
+  // Drive-style folder-icon card (viewMode === 'grid') — a plain large
+  // folder icon, not a peek at the ticker's contents (same reasoning as
+  // FileThumbnail's card__preview--icon: Drive's own grid view doesn't
+  // preview folder contents either, and it'd cost a real request per
+  // ticker to build here for no real benefit).
+  function renderTickerCard(ticker) {
+    return (
+      <div className="card" key={ticker}>
+        <div
+          className="card__preview card__preview--icon"
+          onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}
+        >
+          📁
+        </div>
+        {renamingTicker === ticker ? (
+          <div className="card__rename">
+            <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} autoFocus />
+            <button onClick={() => handleRenameTicker(ticker)}>Save</button>
+            <button onClick={() => setRenamingTicker(null)}>Cancel</button>
+          </div>
+        ) : confirmDeleteTicker === ticker ? (
+          <div className="card__confirm">
+            <p>Delete this ticker and all its files?</p>
+            <button className="danger" onClick={() => handleDeleteTicker(ticker)}>
+              Yes, delete
+            </button>
+            <button onClick={() => setConfirmDeleteTicker(null)}>Cancel</button>
+          </div>
+        ) : (
+          <div className="card__footer">
+            <div className="card__footer-text">
+              <span
+                className="card__name"
+                title={ticker}
+                onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}
+              >
+                {ticker}
+              </span>
+              {tickerActivity[ticker] && (
+                <span className="card__meta">
+                  {describeActivity(tickerActivity[ticker].action, tickerActivity[ticker].user_name)}
+                </span>
+              )}
+            </div>
+            {renderTickerMenu(ticker)}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Drive-style column header for the ticker list view — Name doubles as a
+  // sort control (the only sort that's well-defined for a list of folders,
+  // see filteredItems above); Owner/Date modified/File size are plain
+  // labels, same layout as TickerDetail's file table for visual
+  // consistency (folders show "—" for size, same as Drive's own folder
+  // rows).
+  function renderTickerTableHeader() {
+    return (
+      <div className="data-table__row data-table__header">
+        <span className="data-table__header-cell sortable" onClick={() => changeSortDir(sortDir === 'asc' ? 'desc' : 'asc')}>
+          Name{sortDir === 'asc' ? ' ▲' : ' ▼'}
+        </span>
+        <span className="data-table__header-cell">Owner</span>
+        <span className="data-table__header-cell">Date modified</span>
+        <span className="data-table__header-cell">File size</span>
+        <span className="data-table__header-cell" />
+      </div>
+    )
+  }
+
+  // Compact-list alternative to renderTickerCard above (viewMode ===
+  // 'list') — same actions, same underlying data, laid out as a Drive-style
+  // table row (Name / Owner / Date modified / File size) to match
+  // TickerDetail's file table.
+  function renderTickerListRow(ticker) {
+    const activity = tickerActivity[ticker]
+    if (confirmDeleteTicker === ticker) {
+      return (
+        <div className="data-table__row data-table__row--confirm" key={ticker}>
+          <span>
+            Delete this ticker and all its files?{' '}
+            <button className="danger" onClick={() => handleDeleteTicker(ticker)}>
+              Yes, delete
+            </button>{' '}
+            <button onClick={() => setConfirmDeleteTicker(null)}>Cancel</button>
+          </span>
+        </div>
+      )
+    }
+    return (
+      <div className="data-table__row" key={ticker}>
+        {renamingTicker === ticker ? (
+          <span className="data-table__name">
+            <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} autoFocus />
+            <button onClick={() => handleRenameTicker(ticker)}>Save</button>
+            <button onClick={() => setRenamingTicker(null)}>Cancel</button>
+          </span>
+        ) : (
+          <span className="data-table__name">
+            <span className="data-table__folder-icon">📁</span>
+            <span
+              className="data-table__name-text"
+              onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}
+            >
+              {ticker}
+            </span>
+          </span>
+        )}
+        <span className="data-table__owner" title={activity ? describeActivity(activity.action, activity.user_name) : ''}>
+          {activity ? activity.user_name : '—'}
+        </span>
+        <span className="data-table__modified">{activity ? formatDate(activity.timestamp) : '—'}</span>
+        <span className="data-table__size">—</span>
+        <span className="data-table__actions">{renamingTicker !== ticker && renderTickerMenu(ticker)}</span>
+      </div>
+    )
   }
 
   return (
     <div className="ticker-list">
-      <div className="tabs">
-        {TABS.map((tab) => (
-          <button key={tab} className={tab === activeTab ? 'active' : ''} onClick={() => selectTab(tab)}>
-            {tab}
-          </button>
-        ))}
+      <div className="ticker-list__toolbar">
+        <span className="ticker-list__filter-wrap">
+          <input
+            type="text"
+            placeholder={activeTab === 'Needs Review' ? 'Filter files...' : 'Filter tickers...'}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          {filter && (
+            <button
+              type="button"
+              className="ticker-list__filter-clear"
+              onClick={() => setFilter('')}
+              aria-label="Clear filter"
+            >
+              &times;
+            </button>
+          )}
+        </span>
+        {activeTab !== 'Needs Review' && (
+          <div className="ticker-list__toolbar-right">
+            <select value={sortDir} onChange={(e) => changeSortDir(e.target.value)}>
+              <option value="asc">Sort: Name (A–Z)</option>
+              <option value="desc">Sort: Name (Z–A)</option>
+            </select>
+            <div className="view-toggle">
+              <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => changeViewMode('grid')}>
+                Preview
+              </button>
+              <button className={viewMode === 'list' ? 'active' : ''} onClick={() => changeViewMode('list')}>
+                List
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <UploadButton onUploaded={refreshAll} />
+      {listMessage && <p>{listMessage}</p>}
 
-      <input
-        type="text"
-        placeholder={activeTab === 'Needs Review' ? 'Filter files...' : 'Filter tickers...'}
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-      />
-
-      {activeTab === 'Needs Review' ? (
+      {items === null ? (
+        <p>Loading{activeTab === 'Needs Review' ? ' files' : ' tickers'}…</p>
+      ) : activeTab === 'Needs Review' ? (
         <>
-          {assignMessage && <p>{assignMessage}</p>}
           <ul>
             {filteredItems.map((filename) => (
-              <li key={filename}>
-                {filename}{' '}
+              <li key={filename} className="file-row">
+                <FileThumbnail ticker={null} filename={filename} />
+                <span className="file-row__name">{filename}</span>{' '}
                 <input
                   type="text"
                   placeholder="Ticker"
@@ -190,11 +511,32 @@ function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
                 {confirmDeleteFile === filename ? (
                   <span>
                     Delete this file?{' '}
-                    <button onClick={() => handleDeleteFile(filename)}>Yes, delete</button>{' '}
+                    <button className="danger" onClick={() => handleDeleteFile(filename)}>Yes, delete</button>{' '}
                     <button onClick={() => setConfirmDeleteFile(null)}>Cancel</button>
                   </span>
                 ) : (
-                  <button onClick={() => setConfirmDeleteFile(filename)}>Delete</button>
+                  <RowMenu
+                    open={openFileMenu === filename}
+                    onToggle={() => setOpenFileMenu(openFileMenu === filename ? null : filename)}
+                  >
+                    <button
+                      onClick={() => {
+                        handleOpenFile(filename)
+                        setOpenFileMenu(null)
+                      }}
+                    >
+                      Open in Dropbox
+                    </button>
+                    <button
+                      className="danger"
+                      onClick={() => {
+                        setConfirmDeleteFile(filename)
+                        setOpenFileMenu(null)
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </RowMenu>
                 )}
                 {confirmState[filename] && confirmState[filename].kind === 'confirm_needed' && (
                   <div className="confirm-dialog">
@@ -208,14 +550,6 @@ function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
                         </li>
                       ))}
                     </ul>
-                    {confirmState[filename].category_folder && (
-                      // The candidate also carries a suffix matching a
-                      // theme folder — offer that as its own choice
-                      // instead of only ever framing this as a typo.
-                      <button onClick={() => handleAssign(filename, confirmState[filename].requested_ticker, { force: true })}>
-                        File into {confirmState[filename].category_folder}
-                      </button>
-                    )}{' '}
                     <button
                       onClick={() =>
                         handleAssign(filename, confirmState[filename].requested_ticker, {
@@ -254,14 +588,13 @@ function TickerList({ onSelectTicker, activeTab, onTabChange, onDataChanged }) {
             ))}
           </ul>
         </>
+      ) : viewMode === 'grid' ? (
+        <div className="card-grid">{filteredItems.map(renderTickerCard)}</div>
       ) : (
-        <ul>
-          {filteredItems.map((ticker) => (
-            <li key={ticker} onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}>
-              {ticker}
-            </li>
-          ))}
-        </ul>
+        <div className="data-table">
+          {renderTickerTableHeader()}
+          {filteredItems.map(renderTickerListRow)}
+        </div>
       )}
     </div>
   )

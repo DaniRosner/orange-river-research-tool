@@ -17,6 +17,11 @@ function FileSearch({ onSelectTicker }) {
   // afterward, instead of silently rewriting itself to whatever's
   // currently in the box despite no new search having run.
   const [searchedQuery, setSearchedQuery] = useState('')
+  // True only while a search request is actually in flight — shown as a
+  // "Searching…" message so a slow search reads as "still working," not
+  // as "found nothing," which `results` briefly still says (its previous
+  // value) until the new response lands.
+  const [searching, setSearching] = useState(false)
 
   async function handleSearch(event) {
     event.preventDefault()
@@ -26,11 +31,14 @@ function FileSearch({ onSelectTicker }) {
       return
     }
     setSearchedQuery(trimmed)
+    setSearching(true)
     try {
       const matches = await api.searchFiles(trimmed)
       setResults(matches)
     } catch (err) {
       setResults([])
+    } finally {
+      setSearching(false)
     }
   }
 
@@ -65,7 +73,9 @@ function FileSearch({ onSelectTicker }) {
         <button type="submit">Search</button>
       </form>
 
-      {results && (
+      {searching && <p>Searching…</p>}
+
+      {!searching && results && (
         <div className="search-results">
           {results.length === 0 ? (
             <p>No files matched "{searchedQuery}".</p>
