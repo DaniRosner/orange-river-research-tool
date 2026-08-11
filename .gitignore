@@ -13,5 +13,9 @@ dist/
 .env
 .env.local
 
+# Local activity log (see backend/app/services/activity_log.py) — runtime
+# state, not source; will need a persistent volume once deployed.
+backend/data/
+
 # OS
 .DS_Store

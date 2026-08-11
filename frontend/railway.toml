@@ -1,0 +1,16 @@
+# Railway config for the frontend service. Set this service's Root
+# Directory to `frontend` in the Railway dashboard so this file is picked
+# up — see README.md "Redeploying" for the full setup steps.
+#
+# VITE_API_BASE_URL is baked into the built JS at build time (Vite
+# convention), not read at runtime — it must be set as a build-time
+# variable on this service, pointing at the backend service's public URL.
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "npm ci && npm run build"
+
+[deploy]
+startCommand = "npx serve -s dist -l $PORT"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

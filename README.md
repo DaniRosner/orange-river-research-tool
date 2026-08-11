@@ -86,8 +86,39 @@ credentials.
 
 ## Redeploying
 
-_To be filled in once hosting is set up (Milestone 6): steps to redeploy
-the backend and frontend on Render/Railway from a clean checkout._
+Hosting is [Railway](https://railway.app) (Hobby plan) — two services in one
+Railway project, backend and frontend, each with its own Root Directory set
+in the Railway dashboard and its own `railway.toml` (`backend/railway.toml`,
+`frontend/railway.toml`) controlling the build/start commands.
+
+**One-time setup for a new deploy:**
+
+1. Create a Railway project, then add two services from this repo — one
+   with Root Directory `backend`, one with Root Directory `frontend`.
+2. On the backend service, set every variable from `.env.example` **except**
+   point `DROPBOX_ACTIVE_PATH`, `DROPBOX_INACTIVE_PATH`,
+   `DROPBOX_HISTORICALS_PATH`, and `DROPBOX_NEEDS_REVIEW_PATH` at the real
+   data, not the Dev Sandbox — see "Testing against sandbox data vs. real
+   data" below for the exact values. Set `DROPBOX_REDIRECT_URI` and
+   `FRONTEND_URL` to the deployed URLs, not localhost.
+3. **Attach a Railway Volume to the backend service**, mounted at `/data`,
+   and set `ACTIVITY_DB_PATH=/data/activity.db` in that service's
+   variables. Without this, the activity log (`backend/data/activity.db`)
+   lives on the container's local disk, which Railway wipes on every
+   redeploy — the entire audit trail (who uploaded/moved/deleted what)
+   would silently reset each time the backend redeploys. This is separate
+   from Dropbox itself, which is the actual file storage and always
+   persists regardless.
+4. On the frontend service, set `VITE_API_BASE_URL` (a **build-time**
+   variable — Vite bakes it into the built JS, it isn't read at runtime) to
+   the backend service's public Railway URL.
+5. Once both services have a public URL, go back to the backend's
+   `DROPBOX_REDIRECT_URI` and the Dropbox App Console's allowed OAuth
+   redirect URIs and make sure they match exactly — sign-in fails silently
+   otherwise.
+
+**Ongoing redeploys**: pushing to the connected branch triggers Railway to
+rebuild both services automatically; no manual steps beyond that.
 
 ## Dropbox app ownership handoff
 
@@ -106,10 +137,10 @@ is ever removed, generate a fresh refresh token authorized by a different
 
 ## Testing against sandbox data vs. real data
 
-`DROPBOX_ACTIVE_PATH`, `DROPBOX_INACTIVE_PATH`, and
-`DROPBOX_NEEDS_REVIEW_PATH` in `.env` control where the app looks for its
-folders. During development these point at `/Shared/Dev Sandbox/...` — a
-folder tree with fake test tickers (`TEST1`, `TEST2`, `TEST3`), separate
+`DROPBOX_ACTIVE_PATH`, `DROPBOX_INACTIVE_PATH`, `DROPBOX_HISTORICALS_PATH`,
+and `DROPBOX_NEEDS_REVIEW_PATH` in `.env` control where the app looks for
+its folders. During development these point at `/Shared/Dev Sandbox/...` —
+a folder tree with fake test tickers (`TEST1`, `TEST2`, `TEST3`), separate
 from the real client data, so upload/move testing can't accidentally
 disturb real ticker folders. **Note:** attempts to create a brand-new
 top-level folder (a sibling of `/Shared`) failed with a Dropbox
@@ -117,17 +148,17 @@ top-level folder (a sibling of `/Shared`) failed with a Dropbox
 it's already a member of, which is why the sandbox lives at
 `/Shared/Dev Sandbox/` rather than as its own top-level folder.
 
-To point the app at the real data, change these three variables to:
+To point the app at the real data, change these four variables to:
 
 ```bash
 DROPBOX_ACTIVE_PATH=/Shared/Active
 DROPBOX_INACTIVE_PATH=/Shared/Inactive
+DROPBOX_HISTORICALS_PATH=/Shared/Historicals
 DROPBOX_NEEDS_REVIEW_PATH=/Shared/Needs Review
 ```
 
-(`/Shared/Needs Review` doesn't exist yet in the real data as of this
-writing — it gets created the same way the sandbox one was, or the app
-should be extended to create it automatically on first run.)
+All four real folders exist as of 2026-08-11 (`/Shared/Needs Review` was
+created that day specifically for this — it didn't exist before).
 
 ## How the folder-sorting logic works
 
