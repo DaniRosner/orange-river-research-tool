@@ -12,6 +12,7 @@
   --accent: #ff4500;
   --accent-hover: #d93a00;
   --accent-soft: #fff0e8;
+  --accent-mid: #ffb37e;
   --accent-ink: #a83000;
   --danger: #c0392b;
   --danger-hover: #a5301f;
@@ -422,7 +423,7 @@ li {
      whitespace instead, making a small thumbnail look empty even though
      it loaded correctly. Anchoring top-left actually catches the text. */
   object-position: left top;
-  background: var(--accent-soft);
+  background: var(--accent-mid);
 }
 
 /* Needs Review's list rows — a compact icon-sized thumbnail. */
@@ -483,7 +484,7 @@ li {
 .card__preview {
   position: relative;
   aspect-ratio: 3 / 4;
-  background: var(--accent-soft);
+  background: var(--accent-mid);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   /* Clips just the preview to the card's rounded top corners — kept off
