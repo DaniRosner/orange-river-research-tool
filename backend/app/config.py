@@ -17,6 +17,16 @@ class Settings(BaseSettings):
     dropbox_refresh_token: str = ""
     backend_cors_origins: str = "http://localhost:5173"
 
+    # Per-user Dropbox sign-in (see app/services/auth.py) — separate from
+    # dropbox_refresh_token above, which is the one fixed service account
+    # every ticker/file operation still runs as regardless of who's signed
+    # in. dropbox_redirect_uri must also be registered in the Dropbox App
+    # Console's OAuth redirect URI list, or Dropbox rejects the sign-in
+    # before it ever reaches this app.
+    dropbox_redirect_uri: str = "http://localhost:8000/auth/callback"
+    frontend_url: str = "http://localhost:5173"
+    session_secret_key: str = ""
+
     # Where the app looks for Active/Inactive/Historicals/Needs Review
     # folders. Points at the Dev Sandbox during development; switch to the
     # real /Shared paths (e.g. /Shared/Active) when going live.
@@ -24,6 +34,13 @@ class Settings(BaseSettings):
     dropbox_inactive_path: str = "/Shared/Dev Sandbox/Inactive"
     dropbox_historicals_path: str = "/Shared/Dev Sandbox/Historicals"
     dropbox_needs_review_path: str = "/Shared/Dev Sandbox/Needs Review"
+
+    # Where the activity-log SQLite file lives (see
+    # app/services/activity_log.py). Defaults to a path inside the repo for
+    # local dev; in production this must point at a Railway Volume's mount
+    # path instead, or the audit trail is wiped on every redeploy — see
+    # README.md "Deploying" for the volume setup steps.
+    activity_db_path: str = "data/activity.db"
 
     class Config:
         env_file = "../.env"

@@ -36,50 +36,42 @@ whenever the sorting logic changes.
   to tell "someone typed a real lowercase ticker" apart from "the first word of a sentence,"
   so this errs toward not creating spurious ticker folders.
 
-## 4. Category-suffix (theme folder) routing — the basics
+## 4. Category-suffix (theme folder) routing requires a `(.SUFFIX)` marker — parentheses required
 
-- A suffix like `.BB` glued directly to the front word (`ZBQ.BB Notes.docx`, or even
-  `ZBQ.BB.pdf` with no description at all) routes straight into the matching theme folder
-  (e.g. `Busted Biotechs (.BB)`), no ticker matching involved.
-- **A real, already-existing ticker always wins over suffix routing** — if `ZBQ.BB` itself is
-  a real ticker (its own folder), an upload for `ZBQ.BB` files there, never into the theme
-  folder, because the exact-match check runs first, unconditionally.
-- This does **not** collaterally block other tickers from using the same suffix: if `ZRE.TO`
-  is a real ticker but `RY.TO` isn't, `RY.TO Notes.docx` still correctly routes into a
-  `Toronto Names (.TO)` theme folder — the protection is per-candidate, not suffix-wide.
+- A file destined for a theme folder (e.g. `Busted Biotechs (.BB)`) must carry the SAME
+  `(.SUFFIX)` marker literally in its own filename, anywhere in it — `MCR (.TO) Notes.docx` and
+  `MCR(.TO) Notes.docx` both route into a `Toronto Names (.TO)` theme folder. Scans the **whole
+  filename**, not just the leading word, so a marker mid-sentence (`Key KPIs for ART (.BB)
+  Q3.pdf`) or right before the extension (`my quality companies (.BB).pdf`) works identically to
+  one glued to the front.
+- **A bare `TICKER.SUFFIX` with no parentheses (e.g. `MCR.TO`) is NEVER treated as a
+  category-suffix candidate, no matter what suffix is registered.** That plain-dot shape is
+  reserved entirely for a real ticker's own exchange suffix (`ZRE.TO`, `ASCO.LN`, etc. — see #1).
+  This is a deliberate, load-bearing distinction, not an arbitrary syntax choice — see the next
+  point for why.
+- **Why the parentheses are required:** before this rule existed, a bare dot-suffix was
+  genuinely ambiguous between "someone's exchange-suffixed ticker" and "a deliberate theme-folder
+  tag" — the two used identical syntax. The one gap that couldn't be closed by any confirmation
+  prompt: a brand-new real ticker on some exchange, uploaded for the very first time, has no
+  existing folder to protect it and nothing to compare it against, so it could silently get
+  swept into a theme folder sharing that exchange's code (e.g. `.TO`) with zero warning. Every
+  upload after that first one would've been safe automatically (it'd then be a real, existing
+  ticker, and #1's exact-match check always wins), but that first upload had no safety net.
+  Requiring the parenthesized form for category routing removes the ambiguity structurally
+  instead of trying to guess around it — a plain ticker filename can basically never contain a
+  literal `(.SUFFIX)` by coincidence, so there's nothing left to confirm or protect against. (This
+  is also why the app no longer needs a suffix-typo confirmation dialog, or the old "suspicious
+  extension" check for a bare trailing `.BB` — both existed only to manage the ambiguity that
+  requiring parentheses now eliminates outright.)
+- **A real, already-existing ticker still always wins over category routing** — the exact-match
+  check (#1) runs first, unconditionally, before the marker is ever checked. If `MCR` (or
+  `MCR.TO`) is already a real ticker, a file named `MCR (.TO) Notes.docx` still files under the
+  real `MCR` ticker, not the theme folder — its leading word alone is enough to protect it,
+  regardless of what marker appears later in the name.
+- A filename carrying **two different theme folders' markers** (e.g. `Compare (.BB) and (.TO)
+  names.pdf`) is genuinely ambiguous and falls through instead of picking whichever came first.
 
-## 5. Typo guardrail for suffixed tickers
-
-- If the front word carries a suffix and is a near-typo of a *different* real ticker that
-  shares that exact suffix (e.g. `KBS.BB` vs. the real `ZBQ.BB`), filing is held with three
-  choices: the suggested real ticker, the theme folder the suffix points to, or "create a new
-  ticker" for what was actually typed.
-- Scoped deliberately narrow — comparison is only against real tickers sharing the *same*
-  suffix, and the suffix is stripped off both sides before scoring similarity. Comparing
-  against every real ticker generally (or leaving the suffix in) would misfire on the ordinary,
-  intended case of routing an unrelated real ticker into a theme folder on purpose (e.g.
-  `MRNA.BB` isn't a typo of anything just because `MRNA` happens to be a real ticker
-  elsewhere).
-
-## 6. A suffix doesn't have to be at the front
-
-- The suffix-routing check scans the **whole filename**, not just the leading word — so
-  `Key KPIs for MRNA.BB Q3.pdf` (suffix mid-sentence) and `my quality companies.BB.pdf`
-  (suffix tacked onto the very end, right before the extension) both correctly route into the
-  theme folder, exactly like a front-anchored `MRNA.BB Notes.docx` would.
-- This is one unified, ambiguity-aware scan (not "check the front first, then check everywhere
-  else as a weaker fallback") — see the next point for why that matters.
-
-## 7. Two theme-folder mentions in one filename is ambiguous
-
-- Because suffix-matching scans the whole filename in one pass, a filename mentioning *two*
-  different theme-folder suffixes (e.g. `XYZ.BB and ABC.TO comparison.pdf`) is correctly
-  treated as ambiguous and falls through to Needs Review — it does **not** pick whichever
-  suffix happened to appear first in the string. (Earlier in development this used a
-  fast-but-unchecked front-only path; that's been replaced with the unified scan specifically
-  to fix this case.)
-
-## 8. A real ticker mentioned anywhere always outranks a typo-guess about the front word
+## 5. A real ticker mentioned anywhere always outranks a typo-guess about the front word
 
 - If the front word isn't a match for anything, the app scans the whole filename for an
   *exact*, unambiguous mention of a real ticker before ever falling back to Needs Review —
@@ -95,7 +87,7 @@ whenever the sorting logic changes.
   lowercase ticker `zqrx`) is never an *exact* match, so it's never caught by this check either
   — it still correctly falls through to the typo-guess afterward.
 
-## 9. Two real tickers mentioned is ambiguous — but sometimes worth asking about
+## 6. Two real tickers mentioned is ambiguous — but sometimes worth asking about
 
 - `Comparing ZBQ to ZPAX.pdf` mentions two different real tickers. By default this is
   ambiguous and goes to Needs Review rather than guessing.
@@ -107,16 +99,7 @@ whenever the sorting logic changes.
   of real tickers are also ordinary English words (`ALL`, `IT`, `ON`, ...), and prompting for
   every lowercase collision would turn this safety net into a nuisance.
 
-## 10. A suffix can hide inside what looks like a file extension
-
-- `ZBQ Q3 Numbers.BB` — no real file extension, just `.BB` sitting where one normally would.
-  This is genuinely ambiguous (attempted suffix tag in the wrong spot, vs. just a missing/odd
-  extension) and can't be confidently resolved either way — so it's sent to Needs Review with
-  an explicit reason, **bypassing every other check**, including what would otherwise be a
-  perfectly valid real-ticker match on the front word (`ZBQ` here is a real ticker, but the
-  app deliberately doesn't let that silently win and discard the `.BB`).
-
-## 11. Two theme folders can't safely share the same suffix — and now it's actually checked
+## 7. Two theme folders can't safely share the same suffix — and now it's actually checked
 
 - Creating a new theme folder needs nothing from the app at all: rename (or name) a folder in
   Dropbox to end in `(.SUFFIX)`, e.g. `Japan (.JP)`. Picked up automatically on the next
@@ -129,7 +112,7 @@ whenever the sorting logic changes.
   of the app whenever it finds one — this should never fire in normal use, and if it does, the
   fix is just renaming one of the two folders to a different suffix.
 
-## 12. Duplicate detection has its own edge case: identical content vs. case-only filename collisions
+## 8. Duplicate detection has its own edge case: identical content vs. case-only filename collisions
 
 - Uploading a file whose name and content both exactly match something already there → no new
   file created, just a quiet "already saved" note.
@@ -142,7 +125,7 @@ whenever the sorting logic changes.
   duplicate-conflict messaging can misleadingly say "name conflict" for what's actually a
   no-op. Worth remembering when a test seems to silently "rename" a file you just uploaded.
 
-## 13. Theme folders are never treated as tickers — including when resolving a dropped folder's name
+## 9. Theme folders are never treated as tickers — including when resolving a dropped folder's name
 
 - `ticker_registry.get_known_tickers()` deliberately excludes any folder ending in a
   `(.SUFFIX)` marker from the "known tickers" list. This has no effect on the tabs (Active/
@@ -154,7 +137,7 @@ whenever the sorting logic changes.
   nonsensical "did you mean Toronto Names (.TO)?" suggestion — purely because both names shared
   the literal `(.TO)` text, nothing to do with the names actually being similar.
 
-## 14. "Known tickers" and "known folders" are two different lists now
+## 10. "Known tickers" and "known folders" are two different lists now
 
 - `ticker_registry.get_known_folders()` — every real folder, tickers and theme folders alike.
   Used anywhere the app needs to find and manage a *specific, already-known* folder (view its
@@ -162,12 +145,12 @@ whenever the sorting logic changes.
   those as a real ticker.
 - `ticker_registry.get_known_tickers()` — the same list with theme folders filtered out. Used
   only for ticker-*matching* purposes (typo-checking, resolving a candidate name), where
-  including theme folders caused real bugs (see #13).
+  including theme folders caused real bugs (see #9).
 - The app can now rename a ticker or theme folder in place (`POST /tickers/{ticker}/rename`,
   exposed as a "Rename" button on the ticker detail page) — meant specifically for resolving a
-  suffix collision (#11) from inside the app, without needing to go into Dropbox directly.
+  suffix collision (#7) from inside the app, without needing to go into Dropbox directly.
 
-## 15. Dragging in a genuinely empty folder still creates the ticker
+## 11. Dragging in a genuinely empty folder still creates the ticker
 
 - If a dropped folder resolves to a brand-new ticker (not a real, already-existing one) but has
   zero files inside it, the app still creates the empty ticker folder — it doesn't silently do
@@ -175,3 +158,30 @@ whenever the sorting logic changes.
 - If the folder resolves to a ticker that already exists, this stays a true no-op — there's
   nothing to create, and dragging an empty folder shouldn't move or otherwise touch a real
   ticker that's already there.
+
+## 12. Uploading a single file into a folder that already has subfolders pauses to ask which one
+
+- Once a single (non-folder-drag) upload has resolved to a destination — a ticker match, a
+  mention-anywhere match, or a theme folder via suffix routing — the app checks whether that
+  folder already has subfolders of its own (e.g. a ticker with "Old Models", "Q3 2024"; a theme
+  folder like `Busted Biotechs (.BB)` with its own internal breakdown). If it does, filing pauses
+  ("choose_subfolder") and asks: file it directly in the root, into one of the existing
+  subfolders, or into a brand-new one (typed on the spot — Dropbox creates it automatically,
+  nothing has to exist ahead of time). A folder with no subfolders at all (including a
+  brand-new ticker, which never has any) skips this entirely and files at the root exactly as
+  before — this only changes behavior for destinations that already have real structure.
+- This is what answers the open question from #10/#11 about whether theme-folder suffix routing
+  should be able to reach into a theme folder's own sub-portfolio structure: rather than trying
+  to guess or hard-code a taxonomy (which would need the user's input on exactly how each theme
+  folder is organized internally, and would break the moment that organization changes), the app
+  just asks at upload time. Applies identically to ticker folders and theme folders — whichever
+  the upload resolved to.
+- Deliberately does **not** apply to uploading a whole dropped *folder's* contents — that flow
+  already preserves the dropped folder's own subfolder structure one-for-one (see `relative_path`
+  elsewhere in this doc), so asking per-file on top of that would just fight it. This is scoped
+  to individually selected/dropped loose files only.
+- Implementation note: a resubmission answering "the root, deliberately" can't actually send an
+  empty string — FastAPI's form handling collapses an empty field back to "not answered," which
+  would loop the question forever. `relative_path="."` is the sentinel used instead (a real
+  Dropbox folder can never be named `.`), for both this dialog's root option and the whole-folder
+  upload flow's own root-level files.

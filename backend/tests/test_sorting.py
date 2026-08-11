@@ -1,7 +1,6 @@
 from app.services.sorting import (
     find_ambiguous_uppercase_mentions,
     find_close_matches,
-    find_close_suffixed_ticker_matches,
     find_known_ticker,
     find_ticker_mentioned_anywhere,
     parse_leading_token,
@@ -150,32 +149,3 @@ def test_tokenize_filename_keeps_separate_words_separate():
     assert tokenize_filename("Key KPIs for ART.BB Q3.pdf") == ["Key", "KPIs", "for", "ART.BB", "Q3"]
 
 
-_SUFFIXED_KNOWN_TICKERS = ["ZBQ", "ZPAX", "ZBQ.BB", "ZRE.TO"]
-
-
-def test_close_suffixed_match_catches_typo_of_base_with_same_suffix():
-    # "KBS.BB" vs the real "ZBQ.BB" — one letter off in the base, suffix
-    # matches exactly.
-    assert find_close_suffixed_ticker_matches("KBS.BB", _SUFFIXED_KNOWN_TICKERS) == ["ZBQ.BB"]
-
-
-def test_close_suffixed_match_ignores_unrelated_real_tickers():
-    # "MRNA.BB" shouldn't get flagged just because "ZBQ" or "ZPAX" exist —
-    # neither carries the ".BB" suffix, so neither is even considered.
-    assert find_close_suffixed_ticker_matches("MRNA.BB", _SUFFIXED_KNOWN_TICKERS) == []
-
-
-def test_close_suffixed_match_requires_a_dot():
-    assert find_close_suffixed_ticker_matches("KBS", _SUFFIXED_KNOWN_TICKERS) == []
-
-
-def test_close_suffixed_match_ignores_tickers_with_a_different_suffix():
-    # "XYZ.TO" is suffixed, but not with ".BB" — shouldn't be pulled into
-    # a ".BB" comparison pool at all.
-    assert find_close_suffixed_ticker_matches("KBS.BB", ["ZRE.TO"]) == []
-
-
-def test_close_suffixed_match_strips_suffix_before_scoring():
-    # Without stripping the shared ".BB" first, two totally unrelated
-    # 2-letter bases sharing a suffix could look artificially close.
-    assert find_close_suffixed_ticker_matches("XY.BB", ["AB.BB"]) == []

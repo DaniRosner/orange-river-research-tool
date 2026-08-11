@@ -91,13 +91,12 @@ def parse_leading_token(filename: str) -> str | None:
     ".DS_Store").
 
     Unlike parse_ticker(), this does NOT require a separator and
-    description to follow. It exists specifically for category-suffix
-    routing (see category_routing.split_category_suffix()): a file headed
-    for a themed folder doesn't need its own free-form description the
-    way a real ticker's research notes do — "ZBQ.BB.pdf" should route
-    into the ".BB" folder just as readily as "ZBQ.BB Notes.pdf" does,
-    even though the former has no separator/description at all and would
-    fail parse_ticker() entirely.
+    description to follow — used for the ordinary "does the leading word
+    exactly match a real, existing ticker" check, which shouldn't require
+    a description any more than parse_ticker() itself conceptually needs
+    one (a bare "ZBQ.pdf" is just as much "about ZBQ" as "ZBQ Notes.pdf"
+    is, even though only the latter matches parse_ticker()'s stricter
+    shape).
     """
     match = _LEADING_TOKEN_PATTERN.match(_strip_extension(filename))
     if not match:
@@ -119,9 +118,8 @@ def tokenize_filename(filename: str) -> list[str]:
     """Split a filename (real extension stripped) into word-like tokens —
     each one shaped like a ticker candidate (letters/digits, optionally
     one dot-suffix glued directly onto it with no space). Shared by
-    find_ticker_mentioned_anywhere() and
-    category_routing.find_category_suffix_mentioned_anywhere(), which scan
-    the same tokens for two different kinds of match."""
+    find_ticker_mentioned_anywhere() and find_ambiguous_uppercase_mentions(),
+    which scan the same tokens for two different kinds of match."""
     return _TICKER_TOKEN_PATTERN.findall(_strip_extension(filename))
 
 
@@ -193,48 +191,6 @@ def find_ambiguous_uppercase_mentions(filename: str, known_tickers: list[str]) -
         if found:
             matches.add(found)
     return sorted(matches) if len(matches) >= 2 else []
-
-
-def find_close_suffixed_ticker_matches(candidate: str, known_tickers: list[str], limit: int = 5) -> list[str]:
-    """
-    Typo guardrail for a suffixed candidate (e.g. "KBS.BB") that's about
-    to be routed into a category folder via its suffix. Before that
-    happens, check whether it's actually a near-miss typo of a DIFFERENT
-    real ticker that carries the exact same suffix (e.g. the real ticker
-    "ZBQ.BB") — comparing only the base portion, with the shared suffix
-    stripped off both sides first, so a suffix common to both strings
-    can't artificially inflate how similar they look (e.g. "AB.BB" vs
-    "XY.BB" would otherwise share ".BB" and look closer than "AB" and
-    "XY" actually are on their own).
-
-    Deliberately scoped to ONLY real tickers sharing this exact suffix —
-    comparing against every real ticker generally would misfire on the
-    ordinary, intended case of routing an unrelated real ticker's file
-    into a themed folder on purpose (e.g. "MRNA.BB" shouldn't get flagged
-    as "did you mean MRNA?" just because MRNA is a real ticker elsewhere;
-    it has nothing to do with whatever suffix-sharing ticker this checks
-    against).
-
-    Returns [] if the candidate has no dot suffix at all, or no real
-    ticker happens to share that exact suffix.
-    """
-    if "." not in candidate:
-        return []
-
-    candidate_suffix = f".{candidate.rsplit('.', 1)[-1]}"
-    candidate_base = candidate[: -len(candidate_suffix)]
-
-    same_suffix_bases: dict[str, str] = {}
-    for ticker in known_tickers:
-        if "." not in ticker:
-            continue
-        ticker_suffix = f".{ticker.rsplit('.', 1)[-1]}"
-        if ticker_suffix.upper() != candidate_suffix.upper():
-            continue
-        same_suffix_bases[ticker[: -len(ticker_suffix)]] = ticker
-
-    close_bases = find_close_matches(candidate_base, list(same_suffix_bases.keys()), limit=limit)
-    return [same_suffix_bases[base] for base in close_bases]
 
 
 def find_close_matches(ticker: str, known_tickers: list[str], limit: int = 5) -> list[str]:

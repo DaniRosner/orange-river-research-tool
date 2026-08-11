@@ -4,27 +4,49 @@ Category-suffix routing: some non-ticker folders (e.g. `Busted Biotechs`,
 tickers, but aren't tickers themselves — they're thematic buckets. Per the
 client, each one can be given a custom suffix (the same idea as an
 exchange suffix like `.TO`/`.LN`), by renaming the folder to end with a
-`(.SUFFIX)` marker, e.g. `Busted Biotechs (.BB)`. An upload whose ticker
-carries that suffix (e.g. `ZBQ.BB Notes.docx`) then files directly into
-that folder instead of becoming/joining a literal ticker called `ZBQ.BB`.
+`(.SUFFIX)` marker, e.g. `Busted Biotechs (.BB)`. A file destined for that
+folder carries the SAME `(.SUFFIX)` marker literally in its own filename,
+anywhere in it, e.g. `MCR (.TO) Notes.docx` or `MCR(.TO) Notes.docx` for a
+theme folder tagged `(.TO)` — see find_category_tag().
 
-Deliberately NOT a config file or database — the mapping is discovered
-purely by scanning folder names each time it's needed. This means
-assigning a new suffix to a folder is just renaming it in Dropbox, which
-the client can already do himself with no code change and no separate
-tool to learn. (A real admin UI backed by Dropbox's metadata/properties
-API was considered and rejected for now — see the "the user open questions"
-notes for the reasoning; revisit if this becomes a frequent, high-volume
-workflow.)
+The parenthesized form is deliberate and required: a bare `TICKER.SUFFIX`
+(no parens, e.g. `MCR.TO`) is NEVER treated as a category-suffix
+candidate, no matter what suffix is registered — that shape is reserved
+entirely for a real ticker's own exchange suffix (`ZRE.TO`, `ASCO.LN`,
+etc., see sorting.py). Before this distinction existed, the two were
+genuinely ambiguous: a brand-new real ticker on some exchange, uploaded
+for the first time, had no existing folder to protect it, and could get
+silently swept into a theme folder sharing that same exchange code purely
+because there was nothing yet to compare it against. Requiring the
+parenthesized form for category routing removes that ambiguity
+structurally — a plain filename can never accidentally look like a
+deliberate theme-folder tag, so there's nothing left to guess or confirm.
+
+Deliberately NOT a config file or database — the folder-side mapping is
+discovered purely by scanning folder names each time it's needed. This
+means assigning a new suffix to a folder is just renaming it in Dropbox,
+which the client can already do himself with no code change and no
+separate tool to learn. (A real admin UI backed by Dropbox's
+metadata/properties API was considered and rejected for now — see the
+"the user open questions" notes for the reasoning; revisit if this becomes a
+frequent, high-volume workflow.)
 """
 
+import re
+
 from app.services import dropbox_client, ticker_registry
-from app.services.sorting import CATEGORY_FOLDER_MARKER, find_known_ticker, tokenize_filename
+from app.services.sorting import CATEGORY_FOLDER_MARKER
 
 # Alias kept for readability in this file — same pattern as
 # sorting.CATEGORY_FOLDER_MARKER, shared from there specifically so
 # ticker_registry.py can also use it without a circular import.
 _SUFFIX_MARKER = CATEGORY_FOLDER_MARKER
+
+# Matches a "(.SUFFIX)" marker ANYWHERE in a filename (unanchored, unlike
+# CATEGORY_FOLDER_MARKER which only matches a FOLDER name's own trailing
+# marker) — this is the file-side half of the same convention. See
+# find_category_tag().
+_FILE_CATEGORY_TAG_PATTERN = re.compile(r"\(\.(\w+)\)")
 
 
 def _scan_category_folder_candidates() -> list[tuple[str, str]]:
@@ -57,17 +79,11 @@ def get_category_folders() -> dict[str, str]:
     whose name ends with a `(.SUFFIX)` marker, returning a map of
     uppercase suffix (e.g. ".BB") to that folder's full Dropbox path.
 
-    Deliberately does no filtering based on real tickers — a real exchange
-    suffix (e.g. ".TO") and a category suffix can look identical, but
-    protecting an *established* ticker from ever being hijacked by this is
-    the caller's job: check whether the exact candidate is already a real
-    ticker BEFORE calling split_category_suffix() at all, and skip this
-    entirely if so (see files.py). That per-candidate check is enough on
-    its own — it protects every real ticker that could ever collide,
-    without also blocking *other*, unrelated tickers that happen to share
-    the same suffix (e.g. a real ".TO" category folder should still be
-    usable for "RY.TO" even though "ZRE.TO" already exists as its own
-    real ticker).
+    No filtering based on real tickers happens here — that's unnecessary
+    now that category routing only ever triggers on the parenthesized
+    `(.SUFFIX)` form (see find_category_tag()), which a real ticker's own
+    bare-dot-suffix filename (e.g. "RY.TO") can never match in the first
+    place.
 
     If two different folders both claim the same suffix, whichever is
     scanned last silently wins here — see find_duplicate_category_suffixes()
@@ -129,104 +145,32 @@ def check_suffix_collision_for(folder_name: str) -> str | None:
     )
 
 
-def split_category_suffix(candidate: str, category_folders: dict[str, str]) -> tuple[str, str] | None:
+def find_category_tag(filename: str, category_folders: dict[str, str]) -> str | None:
     """
-    If `candidate` (a parsed ticker-like string, e.g. "ZBQ.BB") ends with a
-    registered category suffix, return (base_ticker, folder_path) — e.g.
-    ("ZBQ", ".../Active/Busted Biotechs (.BB)"). Returns None if it
-    doesn't match any registered suffix, meaning this isn't category
-    routing and normal ticker resolution should proceed instead.
+    Scans the WHOLE filename for a literal "(.SUFFIX)" marker — anywhere
+    in it, not just at the front — matching one of the registered category
+    folders. Returns that folder's full Dropbox path, or None if no
+    registered marker appears anywhere.
 
-    Checked case-insensitively, consistent with how ticker matching works
-    everywhere else in the app.
+    This is the ONLY thing that triggers category routing. A bare
+    "TICKER.SUFFIX" with no parens (e.g. "MCR.TO") never matches here, no
+    matter what suffix is registered — see this module's docstring for why
+    that's deliberate: the parenthesized form is something a real ticker's
+    filename can basically never contain by coincidence, unlike a bare
+    dot-suffix, which is indistinguishable from a genuine exchange suffix.
+    That's what makes this check safe to run unconditionally, with no
+    typo-guardrail or "suspicious extension" ambiguity check needed in
+    front of it the way the old bare-suffix version required — there's
+    nothing left to disambiguate.
+
+    Only ever matches when exactly one DISTINCT theme folder's marker is
+    found — a filename carrying two different theme folders' tags (e.g.
+    "Compare (.BB) and (.TO) names.pdf") is genuinely ambiguous, not this
+    function's job to guess between.
     """
-    upper = candidate.upper()
-    for suffix, folder_path in category_folders.items():
-        if upper.endswith(suffix) and len(candidate) > len(suffix):
-            return candidate[: -len(suffix)], folder_path
-    return None
-
-
-# Real file types this app expects to see as an actual extension. Used
-# only by has_suspicious_extension() below, to tell "this file's
-# extension is just unusual" apart from "this file's extension slot is
-# actually an attempted category suffix" — not an exhaustive list of
-# every real file type, just enough to cover ordinary research files.
-_KNOWN_EXTENSIONS = {
-    "pdf", "doc", "docx", "xls", "xlsx", "xlsm", "csv", "ppt", "pptx",
-    "txt", "rtf", "msg", "eml", "png", "jpg", "jpeg", "gif", "zip",
-    "key", "pages", "numbers", "mp3", "mp4", "mov", "wav", "m4a",
-}  # fmt: skip
-
-
-def has_suspicious_extension(filename: str, category_folders: dict[str, str]) -> bool:
-    """
-    True if filename's real trailing dot-segment (whatever's after the
-    last dot) ISN'T a recognized file extension, but DOES exactly match a
-    registered category suffix — e.g. "ZBQ Q3 Numbers.BB", where ".BB"
-    sits in the position a real extension normally would, but isn't one.
-
-    This is genuinely ambiguous, not confidently resolvable either way:
-    it might be an attempted category-suffix tag that ended up in the
-    wrong spot (should route to that theme folder), or it might just be a
-    file with a missing/unusual real extension that coincidentally
-    matches a suffix (should be filed normally, ".BB" ignored). Callers
-    should send this to Needs Review rather than guessing — deliberately
-    overriding even an otherwise-exact real-ticker match on the leading
-    word, since that match doesn't actually resolve what the trailing
-    segment means; see upload_file()'s use of this, checked before
-    anything else.
-    """
-    if "." not in filename[1:]:
-        return False
-    trailing = filename.rsplit(".", 1)[-1]
-    if trailing.lower() in _KNOWN_EXTENSIONS:
-        return False
-    return f".{trailing.upper()}" in category_folders
-
-
-def find_category_suffix_mentioned_anywhere(
-    filename: str, known_tickers: list[str], category_folders: dict[str, str]
-) -> tuple[str, str] | None:
-    """
-    Companion to sorting.find_ticker_mentioned_anywhere(), but for a
-    category suffix instead of a real ticker — and, unlike that function,
-    used as the PRIMARY category-suffix check in upload_file(), not just a
-    last-resort fallback. Scanning the whole filename rather than just the
-    leading word is what correctly covers every shape a suffix can show
-    up in: glued to a leading ticker-like word with a description
-    following ("ZBQ.BB Notes.docx"), glued to a leading word with nothing
-    else following at all ("ZBQ.BB.pdf"), sitting mid-sentence ("Key KPIs
-    for ART.BB Q3.pdf"), or tacked onto the very end right before the
-    extension ("my quality companies.BB.pdf") — one check handles all of
-    these instead of needing a separate leading-word-only fast path.
-
-    Scans the same word-like tokens as find_ticker_mentioned_anywhere(),
-    but only considers ones containing a dot (a plain word can never be a
-    suffix match) and skips any token that's itself an exact match for a
-    real, existing ticker — that's find_ticker_mentioned_anywhere()'s
-    territory instead, protecting e.g. a real "ZBQ.BB" ticker from ever
-    being treated as a category-suffix candidate. This check is done
-    internally per token, so it holds regardless of whether the caller
-    happens to run this before or after find_ticker_mentioned_anywhere().
-
-    Only ever acts when exactly one distinct category folder is matched
-    across the whole filename — same reasoning as
-    find_ticker_mentioned_anywhere(): a filename that mentions two
-    different theme folders (e.g. "XYZ.BB and ABC.TO comparison.pdf") is
-    genuinely ambiguous, not this function's job to guess between, even
-    if one of them happens to sit at the very front.
-    """
-    matches: dict[str, tuple[str, str]] = {}
-    for token in tokenize_filename(filename):
-        if "." not in token:
-            continue
-        if find_known_ticker(token, known_tickers):
-            continue
-        result = split_category_suffix(token, category_folders)
-        if result:
-            matches[result[1]] = result
-
-    if len(matches) == 1:
-        return next(iter(matches.values()))
-    return None
+    matched_paths = {
+        category_folders[f".{suffix.upper()}"]
+        for suffix in _FILE_CATEGORY_TAG_PATTERN.findall(filename)
+        if f".{suffix.upper()}" in category_folders
+    }
+    return matched_paths.pop() if len(matched_paths) == 1 else None

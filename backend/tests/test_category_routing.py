@@ -1,61 +1,51 @@
-from app.services.category_routing import find_category_suffix_mentioned_anywhere, split_category_suffix
+from app.services.category_routing import find_category_tag
 
 _CATEGORY_FOLDERS = {".BB": "/Active/Busted Biotechs (.BB)", ".TO": "/Active/Toronto Names (.TO)"}
 
 
-def test_split_category_suffix_matches_and_strips():
-    assert split_category_suffix("ZBQ.BB", _CATEGORY_FOLDERS) == ("ZBQ", "/Active/Busted Biotechs (.BB)")
+def test_finds_tag_glued_to_leading_ticker():
+    assert find_category_tag("MCR(.TO) Notes.docx", _CATEGORY_FOLDERS) == "/Active/Toronto Names (.TO)"
 
 
-def test_split_category_suffix_is_case_insensitive():
-    assert split_category_suffix("zbq.bb", _CATEGORY_FOLDERS) == ("zbq", "/Active/Busted Biotechs (.BB)")
+def test_finds_tag_with_a_space_before_it():
+    assert find_category_tag("MCR (.TO) Notes.docx", _CATEGORY_FOLDERS) == "/Active/Toronto Names (.TO)"
 
 
-def test_split_category_suffix_returns_none_when_no_suffix_matches():
-    assert split_category_suffix("ZBQ.ZZ", _CATEGORY_FOLDERS) is None
+def test_finds_tag_mid_sentence():
+    assert find_category_tag("Key KPIs for ART (.BB) Q3.pdf", _CATEGORY_FOLDERS) == "/Active/Busted Biotechs (.BB)"
 
 
-def test_split_category_suffix_requires_something_before_the_suffix():
-    # The bare suffix on its own isn't a valid candidate — there has to be
-    # an actual base ticker/description in front of it.
-    assert split_category_suffix(".BB", _CATEGORY_FOLDERS) is None
+def test_finds_tag_right_before_extension():
+    assert find_category_tag("my quality companies (.BB).pdf", _CATEGORY_FOLDERS) == "/Active/Busted Biotechs (.BB)"
 
 
-_KNOWN_TICKERS = ["ZBQ", "ZPAX", "ZRE.TO"]
+def test_is_case_insensitive():
+    assert find_category_tag("mcr (.to) notes.docx", _CATEGORY_FOLDERS) == "/Active/Toronto Names (.TO)"
 
 
-def test_mentioned_suffix_found_mid_sentence():
-    # "Key KPIs for ART.BB Q3.pdf" — the suffix is glued to "ART" mid-name,
-    # not at the front and not right before the extension.
-    assert find_category_suffix_mentioned_anywhere(
-        "Key KPIs for ART.BB Q3.pdf", _KNOWN_TICKERS, _CATEGORY_FOLDERS
-    ) == ("ART", "/Active/Busted Biotechs (.BB)")
+def test_bare_dot_suffix_never_matches_without_parens():
+    # This is the whole point of requiring the parenthesized form — a real
+    # ticker's own exchange suffix (e.g. a brand-new "MCR.TO") must never
+    # be swept into a theme folder just because ".TO" happens to also be a
+    # registered category suffix.
+    assert find_category_tag("MCR.TO Notes.docx", _CATEGORY_FOLDERS) is None
+    assert find_category_tag("MCR.TO.pdf", _CATEGORY_FOLDERS) is None
 
 
-def test_mentioned_suffix_found_right_before_extension():
-    assert find_category_suffix_mentioned_anywhere(
-        "my quality companies.BB.pdf", _KNOWN_TICKERS, _CATEGORY_FOLDERS
-    ) == ("companies", "/Active/Busted Biotechs (.BB)")
+def test_returns_none_when_suffix_is_unregistered():
+    assert find_category_tag("Notes (.ZZ).pdf", _CATEGORY_FOLDERS) is None
 
 
-def test_mentioned_suffix_defers_to_a_real_ticker_with_the_same_shape():
-    # "ZRE.TO" is itself a real, existing ticker — even though it also
-    # looks suffix-shaped, it should never be treated as a category-suffix
-    # candidate (that's find_ticker_mentioned_anywhere()'s job instead).
-    assert find_category_suffix_mentioned_anywhere("Notes on ZRE.TO.pdf", _KNOWN_TICKERS, _CATEGORY_FOLDERS) is None
+def test_returns_none_when_no_tag_present():
+    assert find_category_tag("random notes with no tag.pdf", _CATEGORY_FOLDERS) is None
 
 
-def test_mentioned_suffix_returns_none_when_ambiguous():
-    # Two different category folders mentioned — genuinely ambiguous.
-    assert (
-        find_category_suffix_mentioned_anywhere("XYZ.BB and ABC.TO notes.pdf", _KNOWN_TICKERS, _CATEGORY_FOLDERS)
-        is None
-    )
+def test_returns_none_when_two_different_tags_are_both_present():
+    # Genuinely ambiguous — not this function's job to pick one.
+    assert find_category_tag("Compare (.BB) and (.TO) names.pdf", _CATEGORY_FOLDERS) is None
 
 
-def test_mentioned_suffix_returns_none_when_absent():
-    assert find_category_suffix_mentioned_anywhere("random notes with no suffix.pdf", _KNOWN_TICKERS, {}) is None
-
-
-def test_mentioned_suffix_ignores_plain_words_without_a_dot():
-    assert find_category_suffix_mentioned_anywhere("BB is not a suffix here.pdf", _KNOWN_TICKERS, _CATEGORY_FOLDERS) is None
+def test_ignores_plain_parenthetical_text():
+    # An ordinary parenthetical aside shouldn't accidentally look like a
+    # tag — it has to be exactly "(.WORD)" to match at all.
+    assert find_category_tag("ZBQ (Q3 Draft).docx", _CATEGORY_FOLDERS) is None

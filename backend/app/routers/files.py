@@ -7,13 +7,12 @@
 # actually file anything, rather than always either succeeding or failing
 # outright. See its docstring below for the full decision tree.
 
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
 
 from app.config import settings
-from app.services import category_routing, dropbox_client, ticker_registry
+from app.services import activity_log, auth, category_routing, dropbox_client, thumbnails, ticker_registry
 from app.services.sorting import (
     find_ambiguous_uppercase_mentions,
-    find_close_suffixed_ticker_matches,
     find_known_ticker,
     find_ticker_mentioned_anywhere,
     parse_leading_token,
@@ -28,6 +27,17 @@ router = APIRouter(prefix="/files", tags=["files"])
 # upload sessions for a case this unlikely to come up.
 MAX_SIMPLE_UPLOAD_BYTES = 150 * 1024 * 1024
 
+# A `relative_path` of "" can't be used to mean "the root, deliberately"
+# — FastAPI's `Form(None)` silently coerces an empty-string multipart
+# field back to None (indistinguishable from the field being absent
+# entirely), which would make a chosen root answer loop straight back
+# into another choose_subfolder question. This sentinel is what
+# "deliberately the root" is sent as instead — chosen because a real
+# Dropbox folder can never be named "." (see UploadButton.jsx, which
+# sends this both for a folder-drag's own root-level files and for the
+# choose_subfolder dialog's root option).
+ROOT_RELATIVE_PATH = "."
+
 
 def _resolve_upload(
     folder: str,
@@ -36,9 +46,22 @@ def _resolve_upload(
     on_duplicate: str | None,
     success_status: str,
     extra: dict,
+    user: dict,
+    log_ticker: str | None,
+    log_relative_path: str = "",
 ) -> dict:
     """
     Check `folder` for an existing file named `filename` before uploading.
+
+    `user`/`log_ticker`/`log_relative_path` are for activity_log only —
+    this is the one place an upload actually happens (the
+    dropbox_client.upload_file() call below), regardless of which of
+    upload_file()'s many resolution paths got here, so it's the natural
+    single choke point to log from rather than repeating that at every
+    call site. `log_ticker` is the *real* folder name (a theme folder's
+    own name, not the display-only base ticker upload_file() sometimes
+    computes for it) — it has to match exactly what list_files_for_ticker()
+    will later look activity up by.
 
     Three cases, distinguished using Dropbox's content hash (see
     compute_content_hash()) so we know *before* saying anything whether a
@@ -94,11 +117,45 @@ def _resolve_upload(
     actual_filename = dropbox_client.upload_file(
         f"{folder}/{filename}", content, overwrite=(on_duplicate == "replace")
     )
+    activity_log.record(
+        user, "uploaded", ticker=log_ticker, filename=actual_filename, relative_path=log_relative_path
+    )
     return {"status": success_status, "filename": actual_filename, **extra}
 
 
+def _maybe_ask_subfolder(folder: str, relative_path: str | None) -> dict | None:
+    """
+    Before actually filing into `folder`, check whether it already has
+    subfolders (e.g. a ticker with "Old Models", "Q3 2024") — if so, and
+    the caller hasn't already answered this via `relative_path`, pause and
+    ask which one the file should go into rather than silently dropping
+    it at the folder's root. Most real ticker/theme folders in practice do
+    have their own internal structure, so filing everything flat would
+    just mean a manual move afterward every time.
+
+    `relative_path is not None` (including "", meaning "root,
+    deliberately") means this has already been answered for this upload —
+    skip straight through. A folder with no subfolders (including one
+    that doesn't exist yet, e.g. a brand-new ticker — see
+    dropbox_client.list_folder()) skips this too, since there's nothing to
+    choose between.
+
+    Deliberately NOT applied to a whole dropped *folder's* contents (see
+    UploadButton.jsx) — there, `relative_path` is always already set
+    (possibly to "") from the dropped folder's own structure, so this
+    never fires for that flow; asking per-file would fight the "preserve
+    the folder's existing layout" behavior that already exists for it.
+    """
+    if relative_path is not None:
+        return None
+    subfolders = sorted(entry["name"] for entry in dropbox_client.list_folder(folder) if entry["is_folder"])
+    if not subfolders:
+        return None
+    return {"status": "choose_subfolder", "folder_label": folder.rsplit("/", 1)[-1], "subfolders": subfolders}
+
+
 def _fallback_to_needs_review_or_mention(
-    filename: str, content: bytes, on_duplicate: str | None, known: dict[str, str], reason: str
+    filename: str, content: bytes, on_duplicate: str | None, known: dict[str, str], reason: str, user: dict
 ) -> dict:
     """
     Last resort before giving up on a file entirely: an exact,
@@ -129,27 +186,15 @@ def _fallback_to_needs_review_or_mention(
         return {"status": "ambiguous_mention", "filename": filename, "candidates": ambiguous}
 
     return _resolve_upload(
-        settings.dropbox_needs_review_path, filename, content, on_duplicate, "needs_review", {"reason": reason}
+        settings.dropbox_needs_review_path,
+        filename,
+        content,
+        on_duplicate,
+        "needs_review",
+        {"reason": reason},
+        user,
+        log_ticker=None,
     )
-
-
-def _category_alternative_for(candidate: str) -> dict:
-    """
-    When the suffix-typo guardrail (find_close_suffixed_ticker_matches)
-    holds a candidate like "KBS.BB" for confirmation, it's not the only
-    real possibility — "KBS.BB" also carries a suffix that matches a
-    theme folder, so filing it there instead of correcting the typo is
-    just as plausible. This computes that alternative (if there is one)
-    so the caller can offer it as a third option alongside the typo
-    suggestion(s) and "create a new ticker," rather than only ever
-    presenting the typo correction. Returns `{}` (nothing extra) if the
-    candidate's suffix doesn't match a registered theme folder.
-    """
-    category_match = category_routing.split_category_suffix(candidate, category_routing.get_category_folders())
-    if not category_match:
-        return {}
-    base, category_folder = category_match
-    return {"category_folder": category_folder.rsplit("/", 1)[-1], "category_base": base}
 
 
 @router.post("/upload")
@@ -159,7 +204,7 @@ async def upload_file(
     target_status: str | None = Form(None),
     on_duplicate: str | None = Form(None),
     relative_path: str | None = Form(None),
-    confirm_category: bool = Form(False),
+    user: dict = Depends(auth.current_user),
 ):
     """
     Accept a research file upload and file it into Dropbox.
@@ -172,13 +217,24 @@ async def upload_file(
     of the ticker folder (e.g. "Old Models") instead of directly inside
     it — used when uploading a whole dropped *folder's* contents (see
     `/tickers/resolve`), so any subfolders inside it are preserved rather
-    than flattened.
+    than flattened. For a single (non-folder) upload, it instead carries
+    the answer to a `choose_subfolder` pause (see `_maybe_ask_subfolder`)
+    — "" means "file it directly in the root, deliberately," not "no
+    answer yet."
 
-    `confirm_category`, if provided instead, is a resubmission confirming
-    the OTHER kind of answer a `confirm_needed` response can offer: when
-    it includes a `category_folder` (see step 2 below), the caller can
-    resubmit with this set to true to file into that theme folder instead
-    of correcting the typo or creating a new ticker.
+    Once a destination ticker or theme folder has actually been resolved
+    below (by any of steps 1–3, or an `override_ticker` resubmission) —
+    but before a single loose file is ever filed into it — filing pauses
+    with `{"status": "choose_subfolder", "subfolders": [...]}` if that
+    folder already has its own subfolders and `relative_path` hasn't been
+    provided yet. Most real ticker/theme folders do have internal
+    structure (e.g. "Old Models", per-quarter breakdowns), so this stops
+    every upload from defaulting to a flat root that then needs a manual
+    move. Resubmit with `relative_path` set to one of the listed subfolder
+    names, a new name to create one, or `""` for the root. Never fires for
+    a whole dropped *folder's* contents, which already carries its own
+    `relative_path` for every file (see UploadButton.jsx) — only for
+    loose, individually selected/dropped files.
 
     Otherwise, in order:
 
@@ -187,52 +243,38 @@ async def upload_file(
        follow) exactly match a real, already-existing ticker? -> filed
        there. Checked first, no exceptions — an established ticker can
        never be hijacked by category routing.
-    2. Not that, but is the leading token a likely typo of a DIFFERENT
-       real ticker sharing its exact suffix (e.g. "KBS.BB" vs the real
-       "ZBQ.BB")? -> filing is held ("confirm_needed") rather than
-       silently swallowed by category routing. If the candidate's suffix
-       ALSO matches a theme folder (it usually will, since that's the
-       whole reason this check exists), the response includes
-       `category_folder` too — the caller can offer three choices: accept
-       a suggestion (`override_ticker`), file into the theme folder
-       (`confirm_category`), or create a new ticker for what was typed
-       (`override_ticker` + `target_status`). See
-       find_close_suffixed_ticker_matches() for why this is scoped to
-       same-suffix tickers only.
-    3. Not that, but is a category suffix matched ANYWHERE in the
-       filename — not just the leading token — that's registered to a
-       theme folder (e.g. `.BB` for `Busted Biotechs (.BB)`, set up by
-       renaming a non-ticker folder — see category_routing.py)? -> filed
-       directly into that folder, no further ticker matching/confirmation.
-       Covers the deliberate "TICKER.SUFFIX Description.ext" shape
-       (doesn't even require a separator/description — "ZBQ.BB.pdf"
-       matches just as readily as "ZBQ.BB Notes.pdf") as well as a suffix
-       mentioned mid-sentence or tacked onto the very end. Only acts when
-       exactly one distinct theme folder is matched anywhere in the name —
-       a filename mentioning two different theme folders is genuinely
+    2. Not that, but does a `(.SUFFIX)` marker — parentheses required,
+       e.g. `(.BB)` — appear ANYWHERE in the filename, matching a theme
+       folder registered via category_routing.py (set up by renaming a
+       non-ticker folder to end in that same marker, e.g.
+       `Busted Biotechs (.BB)`)? -> filed directly into that folder, no
+       further ticker matching/confirmation. The parenthesized form is
+       required specifically so this can never collide with a real
+       ticker's own bare exchange suffix (e.g. `MCR.TO`, no parens) — see
+       category_routing.find_category_tag() for why that used to be a
+       genuine ambiguity and no longer is. Only acts when exactly one
+       distinct theme folder's marker is found anywhere in the name — a
+       filename carrying two different theme folders' tags is genuinely
        ambiguous and falls through instead of picking whichever happened
-       to come first. See
-       category_routing.find_category_suffix_mentioned_anywhere().
-    4. Does a real, already-existing ticker show up unambiguously
-       ANYWHERE in the filename — not just the leading word (e.g. "zbq"
-       in "quarterly notes on zbq.pdf", or "ZRE.TO" in "Notes on ZRE.TO
-       for review.pdf")? -> filed there. Checked here, deliberately
-       BEFORE steps 6–7 below — an exact mention elsewhere is a stronger
-       signal than a fuzzy typo-guess about the leading word alone, which
-       is what stops an ordinary phrase's leading word (e.g. "Notes")
-       from being mistaken for a typo of some unrelated real ticker
-       before a real mention elsewhere ever gets a chance. Only acts when
-       exactly one real ticker is mentioned — two is genuinely ambiguous,
-       see step 8. See find_ticker_mentioned_anywhere().
-    5. Filename doesn't have the `TICKER Description.ext` shape at all
+       to come first.
+    3. Not that, but does a real, already-existing ticker show up
+       unambiguously ANYWHERE in the filename — not just the leading word
+       (e.g. "zbq" in "quarterly notes on zbq.pdf", or "ZRE.TO" in "Notes
+       on ZRE.TO for review.pdf")? -> filed there. Checked here,
+       deliberately BEFORE steps 5–6 below — an exact mention elsewhere is
+       a stronger signal than a fuzzy typo-guess about the leading word
+       alone, which is what stops an ordinary phrase's leading word (e.g.
+       "Notes") from being mistaken for a typo of some unrelated real
+       ticker before a real mention elsewhere ever gets a chance. Only
+       acts when exactly one real ticker is mentioned — two is genuinely
+       ambiguous, see step 7. See find_ticker_mentioned_anywhere().
+    4. Filename doesn't have the `TICKER Description.ext` shape at all
        (no space/hyphen/underscore-separated description) -> skip to
-       step 8.
-    6. Parsed ticker doesn't match an existing ticker, but looks like a
-       typo of a real one (checked against every real ticker generally,
-       not suffix-scoped this time) -> filing is held; the caller must
-       resubmit with `override_ticker` set to the confirmed/corrected
-       ticker.
-    7. Parsed ticker doesn't match, has no close look-alikes, and looks
+       step 7.
+    5. Parsed ticker doesn't match an existing ticker, but looks like a
+       typo of a real one -> filing is held; the caller must resubmit with
+       `override_ticker` set to the confirmed/corrected ticker.
+    6. Parsed ticker doesn't match, has no close look-alikes, and looks
        like a deliberate ticker (uppercase): this is a genuinely new
        ticker. Rather than assuming it belongs in Active, filing is held
        ("new_ticker_needs_status") until the caller resubmits with
@@ -240,8 +282,8 @@ async def upload_file(
        to "active", "inactive", or "historicals" — the file might just as
        easily be someone archiving notes for a company that's already
        inactive, or one that doesn't fit either bucket cleanly.
-    8. Last resort, reached either because step 5 found no pattern at all
-       or because the step-6/7 checks came up empty: was step 4's mention
+    7. Last resort, reached either because step 4 found no pattern at all
+       or because the step-5/6 checks came up empty: was step 3's mention
        check actually ambiguous (two-plus real tickers mentioned), and
        was that ambiguity written in all-caps (e.g. "Comparing ZBQ to
        ZPAX.pdf")? -> filing is held ("ambiguous_mention") until the
@@ -249,7 +291,7 @@ async def upload_file(
        meant. Scoped to all-caps mentions specifically — a lowercase
        collision is far more likely to be coincidental prose than a
        deliberate reference. See find_ambiguous_uppercase_mentions().
-    9. Nothing above resolved it -> Needs Review.
+    8. Nothing above resolved it -> Needs Review.
 
     If a file with the same name already exists wherever this one is
     about to be filed, filing is held ("duplicate_needs_confirmation")
@@ -274,76 +316,48 @@ async def upload_file(
         # where it actually lives (ignore target_status — that's only
         # for a ticker that doesn't exist yet). Otherwise this is
         # confirming a brand-new ticker, so target_status decides.
+        is_new_ticker = override_ticker not in known
         status = known.get(
             override_ticker, target_status if target_status in ticker_registry.STATUSES else "active"
         )
         folder = f"{ticker_registry.folder_path_for_status(status)}/{override_ticker}"
-        if relative_path:
+        # A ticker created implicitly this way (the far more common path —
+        # dragging/uploading straight into a brand-new name — vs. the
+        # dedicated empty-folder "create" endpoint) previously logged only
+        # the file-level "uploaded" entry, never a ticker-level "created"
+        # one. That left latest_for_ticker() with nothing to show until
+        # some later ticker-level action (move/rename/delete) happened —
+        # and worse, if the ticker had been deleted and then recreated
+        # this way, its card kept showing "Deleted by X" forever, since
+        # recreation never overwrote that stale record. `known` is
+        # re-fetched fresh per request, so this naturally fires only once
+        # per new ticker — every subsequent file in the same folder-drop
+        # batch sees the folder already exists and skips this.
+        if is_new_ticker:
+            activity_log.record(user, "created", ticker=override_ticker, detail=f"status={status}")
+        subfolder_ask = _maybe_ask_subfolder(folder, relative_path)
+        if subfolder_ask:
+            return subfolder_ask
+        if relative_path and relative_path != ROOT_RELATIVE_PATH:
             folder = f"{folder}/{relative_path}"
-        return _resolve_upload(folder, file.filename, content, on_duplicate, "filed", {"ticker": override_ticker})
-
-    if confirm_category:
-        # Resubmission confirming the theme-folder option offered
-        # alongside a suffix-typo suggestion (see step 2's confirm_needed
-        # response) — re-derive the same leading token and file straight
-        # into whatever theme folder its suffix matches, same as it would
-        # have without the typo guardrail catching it first.
-        leading_token = parse_leading_token(file.filename)
-        category_match = leading_token and category_routing.split_category_suffix(
-            leading_token, category_routing.get_category_folders()
-        )
-        if category_match:
-            base_ticker, category_folder = category_match
-            category_name = category_folder.rsplit("/", 1)[-1]
-            return _resolve_upload(
-                category_folder,
-                file.filename,
-                content,
-                on_duplicate,
-                "filed_category",
-                {"ticker": base_ticker, "category_folder": category_name},
-            )
-
-    # Checked before anything else: does this filename's real extension
-    # slot hold something that isn't a real file type, but IS a
-    # registered category suffix (e.g. "ZBQ Q3 Numbers.BB")? That's
-    # genuinely ambiguous — it might be an attempted suffix tag in the
-    # wrong position, or just an unusual/missing extension — so it goes
-    # straight to Needs Review, bypassing every other check below
-    # (including the mention-anywhere fallbacks — deliberately, since
-    # "ZBQ" would otherwise still get rediscovered there and this check
-    # would accomplish nothing) rather than letting whatever the leading
-    # word happens to be (even a real ticker like "ZBQ" here) silently
-    # win while discarding the ".BB". See
-    # category_routing.has_suspicious_extension() for the full reasoning.
-    if category_routing.has_suspicious_extension(file.filename, category_routing.get_category_folders()):
         return _resolve_upload(
-            settings.dropbox_needs_review_path,
+            folder,
             file.filename,
             content,
             on_duplicate,
-            "needs_review",
-            {
-                "reason": "filename's extension isn't a recognized file type, and matches a registered category "
-                "suffix instead — unclear whether that's deliberate"
-            },
+            "filed",
+            {"ticker": override_ticker},
+            user,
+            log_ticker=override_ticker,
+            log_relative_path=relative_path if relative_path and relative_path != ROOT_RELATIVE_PATH else "",
         )
 
     # The leading token (letters/digits plus an optional dot suffix,
     # extracted WITHOUT requiring a separator+description to follow — see
-    # parse_leading_token()) gets two checks before anything else below:
-    #
-    # 1. Does it exactly match a real, already-existing ticker? Checked
-    #    first, no exceptions — an established ticker can never be
-    #    hijacked by category routing, no matter what suffix it carries.
-    # 2. If not, is it a likely typo of a DIFFERENT real ticker that
-    #    shares its exact suffix (e.g. "KBS.BB" vs the real "ZBQ.BB")?
-    #    Held for confirmation rather than silently swallowed by category
-    #    routing — see find_close_suffixed_ticker_matches() for why this
-    #    is scoped to same-suffix tickers only (checking against every
-    #    real ticker generally would misfire on the ordinary, intended
-    #    case of routing an unrelated real ticker into a themed folder on
-    #    purpose, e.g. "MRNA.BB").
+    # parse_leading_token()): does it exactly match a real, already-
+    # existing ticker? Checked first, no exceptions — an established
+    # ticker can never be hijacked by category routing, no matter what
+    # suffix it carries.
     leading_token = parse_leading_token(file.filename)
     if leading_token:
         found = find_known_ticker(leading_token, list(known.keys()))
@@ -355,45 +369,51 @@ async def upload_file(
             # reaches this ordinary ticker-match path with it set instead,
             # so a real ticker's subfolder structure is honored regardless
             # of which path resolved the ticker.
-            if relative_path:
+            subfolder_ask = _maybe_ask_subfolder(folder, relative_path)
+            if subfolder_ask:
+                return subfolder_ask
+            if relative_path and relative_path != ROOT_RELATIVE_PATH:
                 folder = f"{folder}/{relative_path}"
-            return _resolve_upload(folder, file.filename, content, on_duplicate, "filed", {"ticker": found})
+            return _resolve_upload(
+                folder,
+                file.filename,
+                content,
+                on_duplicate,
+                "filed",
+                {"ticker": found},
+                user,
+                log_ticker=found,
+                log_relative_path=relative_path if relative_path and relative_path != ROOT_RELATIVE_PATH else "",
+            )
 
-        close_suffixed = find_close_suffixed_ticker_matches(leading_token, list(known.keys()))
-        if close_suffixed:
-            return {
-                "status": "confirm_needed",
-                "parsed_ticker": leading_token,
-                "suggestions": close_suffixed,
-                **_category_alternative_for(leading_token),
-            }
-
-    # Category-suffix routing is checked next, scanning the WHOLE filename
-    # (not just the leading token) for a suffix match — this is the same
-    # function used later as a last-resort fallback for a real ticker
-    # mention (find_ticker_mentioned_anywhere), applied here to suffixes
-    # instead, and checked this early specifically so the common,
-    # deliberate "TICKER.SUFFIX Description.ext" shape still resolves
-    # immediately without waiting on every other check to fail first.
-    # Scanning the whole filename rather than just the leading token means
-    # a filename that mentions TWO different theme folders (e.g. "XYZ.BB
-    # and ABC.TO comparison.pdf") is correctly treated as ambiguous and
-    # falls through instead of the front one winning just because it
-    # happened to be first — same "only act when unambiguous" reasoning as
-    # every other mention-based match in this app.
-    category_match = category_routing.find_category_suffix_mentioned_anywhere(
-        file.filename, list(known.keys()), category_routing.get_category_folders()
-    )
-    if category_match:
-        base_ticker, category_folder = category_match
+    # Category-suffix routing is checked next: does a `(.SUFFIX)` marker —
+    # parentheses required — appear ANYWHERE in the filename, matching a
+    # registered theme folder? Checked this early specifically so the
+    # deliberate "TICKER (.SUFFIX) Description.ext" shape still resolves
+    # immediately without waiting on every other check to fail first. The
+    # required parens are what make this unconditionally safe to check
+    # with no typo-guardrail or "suspicious extension" ambiguity check in
+    # front of it — a real ticker's own bare exchange suffix (e.g.
+    # "MCR.TO") can never match this, parenthesized or not, so there's
+    # nothing left to disambiguate. See category_routing.find_category_tag().
+    category_folder = category_routing.find_category_tag(file.filename, category_routing.get_category_folders())
+    if category_folder:
         category_name = category_folder.rsplit("/", 1)[-1]
+        subfolder_ask = _maybe_ask_subfolder(category_folder, relative_path)
+        if subfolder_ask:
+            return subfolder_ask
+        if relative_path and relative_path != ROOT_RELATIVE_PATH:
+            category_folder = f"{category_folder}/{relative_path}"
         return _resolve_upload(
             category_folder,
             file.filename,
             content,
             on_duplicate,
             "filed_category",
-            {"ticker": base_ticker, "category_folder": category_name},
+            {"category_folder": category_name},
+            user,
+            log_ticker=category_name,
+            log_relative_path=relative_path if relative_path and relative_path != ROOT_RELATIVE_PATH else "",
         )
 
     # Does a real, already-existing ticker show up unambiguously ANYWHERE
@@ -413,13 +433,33 @@ async def upload_file(
     mentioned = find_ticker_mentioned_anywhere(file.filename, list(known.keys()))
     if mentioned:
         folder = f"{ticker_registry.folder_path_for_status(known[mentioned])}/{mentioned}"
-        return _resolve_upload(folder, file.filename, content, on_duplicate, "filed_mentioned", {"ticker": mentioned})
+        subfolder_ask = _maybe_ask_subfolder(folder, relative_path)
+        if subfolder_ask:
+            return subfolder_ask
+        if relative_path and relative_path != ROOT_RELATIVE_PATH:
+            folder = f"{folder}/{relative_path}"
+        return _resolve_upload(
+            folder,
+            file.filename,
+            content,
+            on_duplicate,
+            "filed_mentioned",
+            {"ticker": mentioned},
+            user,
+            log_ticker=mentioned,
+            log_relative_path=relative_path if relative_path and relative_path != ROOT_RELATIVE_PATH else "",
+        )
 
     ticker = parse_ticker(file.filename)
 
     if ticker is None:
         return _fallback_to_needs_review_or_mention(
-            file.filename, content, on_duplicate, known, "filename doesn't match the 'TICKER Description.ext' pattern"
+            file.filename,
+            content,
+            on_duplicate,
+            known,
+            "filename doesn't match the 'TICKER Description.ext' pattern",
+            user,
         )
 
     # Note: resolution["kind"] can never be "matched" here — that's
@@ -439,6 +479,7 @@ async def upload_file(
         on_duplicate,
         known,
         "parsed prefix isn't a recognized ticker and doesn't look like a deliberate new one",
+        user,
     )
 
 
@@ -503,20 +544,99 @@ def list_files_for_ticker(ticker: str):
     Each entry includes `relative_path` (empty string for a file directly
     in the ticker folder, e.g. "Old Models" for one nested inside that
     subfolder) so the frontend can render subfolders as their own group
-    rather than silently hiding everything inside them — see
-    dropbox_client.list_folder_recursive().
+    rather than silently hiding everything inside them, `size` and
+    `modified` (an ISO 8601 timestamp) so the frontend can offer sorting
+    by either, and `last_action`/`last_action_by`/`last_action_at` — who
+    did what to this file *through this app* (upload/delete/etc, see
+    activity_log.py), all `None` if nothing's been logged for it yet
+    (e.g. it predates this feature, or was only ever touched directly in
+    Dropbox).
+
+    Returns `{"files": [...], "folders": [...]}` — `folders` is every
+    subfolder's relative_path at any depth, including ones with nothing
+    in them (see dropbox_client.list_folder_recursive()) — a folder that
+    already has a file inside it is also discoverable from that file's
+    own relative_path, but a genuinely empty one (e.g. just created via
+    POST .../folder below) has no file to infer it from.
     """
     known = ticker_registry.get_known_folders()
     status = known.get(ticker)
     if status is None:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     folder = f"{ticker_registry.folder_path_for_status(status)}/{ticker}"
-    entries = dropbox_client.list_folder_recursive(folder)
-    return [{"name": entry["name"], "relative_path": entry["relative_path"]} for entry in entries]
+    listing = dropbox_client.list_folder_recursive(folder)
+    entries = listing["files"]
+    activity = activity_log.latest_for_files(ticker, [entry["name"] for entry in entries])
+    result = []
+    for entry in entries:
+        entry_activity = activity.get((entry["name"], entry["relative_path"]))
+        result.append(
+            {
+                "name": entry["name"],
+                "relative_path": entry["relative_path"],
+                "size": entry["size"],
+                "modified": entry["modified"],
+                "last_action": entry_activity["action"] if entry_activity else None,
+                "last_action_by": entry_activity["user_name"] if entry_activity else None,
+                "last_action_at": entry_activity["timestamp"] if entry_activity else None,
+            }
+        )
+    return {"files": result, "folders": listing["folders"]}
+
+
+@router.post("/ticker/{ticker}/folder")
+def create_subfolder(
+    ticker: str, name: str, relative_path: str | None = None, user: dict = Depends(auth.current_user)
+):
+    """
+    Create an empty subfolder inside a ticker's folder — at the root, or
+    nested inside an existing subfolder if `relative_path` is given (same
+    convention as everywhere else `relative_path` is used). Lets someone
+    set up a ticker's structure (e.g. "Old Models") ahead of time, without
+    needing a file in hand the way the upload flow's choose_subfolder
+    "New folder" option requires.
+    """
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name can't be empty.")
+    known = ticker_registry.get_known_folders()
+    status = known.get(ticker)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    folder = f"{ticker_registry.folder_path_for_status(status)}/{ticker}"
+    if relative_path:
+        folder = f"{folder}/{relative_path}"
+    dropbox_client.create_folder(f"{folder}/{name}")
+    return {"status": "created", "name": name}
+
+
+@router.delete("/ticker/{ticker}/folder")
+def delete_subfolder(ticker: str, relative_path: str, user: dict = Depends(auth.current_user)):
+    """
+    Permanently delete a subfolder — and everything inside it — from a
+    ticker's folder. `relative_path` is the subfolder's own path relative
+    to the ticker root (e.g. "Old Filings", or "Old Filings/2023" for one
+    nested inside that) — same convention as everywhere else
+    `relative_path` is used, except here it identifies the folder being
+    deleted itself, not a file's containing folder. The frontend is
+    expected to confirm with the user before ever calling this — see
+    dropbox_client.delete().
+    """
+    if not relative_path:
+        raise HTTPException(status_code=400, detail="relative_path is required.")
+    known = ticker_registry.get_known_folders()
+    status = known.get(ticker)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    folder = f"{ticker_registry.folder_path_for_status(status)}/{ticker}/{relative_path}"
+    dropbox_client.delete(folder)
+    return {"status": "deleted", "relative_path": relative_path}
 
 
 @router.delete("/ticker/{ticker}/{filename}")
-def delete_ticker_file(ticker: str, filename: str, relative_path: str | None = None):
+def delete_ticker_file(
+    ticker: str, filename: str, relative_path: str | None = None, user: dict = Depends(auth.current_user)
+):
     """Permanently delete a single file from a ticker's folder, or from a
     subfolder inside it if `relative_path` is given (e.g. "Old Models" —
     same convention as everywhere else `relative_path` is used). The
@@ -530,43 +650,106 @@ def delete_ticker_file(ticker: str, filename: str, relative_path: str | None = N
     if relative_path:
         folder = f"{folder}/{relative_path}"
     dropbox_client.delete(f"{folder}/{filename}")
+    activity_log.record(user, "deleted", ticker=ticker, filename=filename, relative_path=relative_path or "")
     return {"status": "deleted", "filename": filename}
+
+
+@router.get("/ticker/{ticker}/{filename}/thumbnail")
+def get_ticker_file_thumbnail(ticker: str, filename: str, relative_path: str | None = None):
+    """
+    Best-effort real preview thumbnail for a file inside a ticker/theme
+    folder — PDF, Word, PowerPoint-family documents, and actual image
+    files get a real JPEG (see thumbnails.get_thumbnail()); everything
+    else (notably Excel/CSV, where Dropbox's own preview is raw HTML
+    rather than something image-able) returns 404. The frontend treats
+    that 404 as "show the plain file-type icon instead," not an error —
+    see FileThumbnail.jsx.
+    """
+    known = ticker_registry.get_known_folders()
+    status = known.get(ticker)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    folder = f"{ticker_registry.folder_path_for_status(status)}/{ticker}"
+    if relative_path:
+        folder = f"{folder}/{relative_path}"
+    thumbnail = thumbnails.get_thumbnail(f"{folder}/{filename}", filename)
+    if thumbnail is None:
+        raise HTTPException(status_code=404, detail="No preview available for this file type")
+    return Response(content=thumbnail, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
+@router.get("/ticker/{ticker}/{filename}/open-link")
+def get_ticker_file_open_link(ticker: str, filename: str, relative_path: str | None = None):
+    """A Dropbox web URL that opens this file in Dropbox's own preview UI
+    — see dropbox_client.get_shareable_link()."""
+    known = ticker_registry.get_known_folders()
+    status = known.get(ticker)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    folder = f"{ticker_registry.folder_path_for_status(status)}/{ticker}"
+    if relative_path:
+        folder = f"{folder}/{relative_path}"
+    return {"url": dropbox_client.get_shareable_link(f"{folder}/{filename}")}
 
 
 @router.delete("/needs-review/{filename}")
-def delete_needs_review_file(filename: str):
+def delete_needs_review_file(filename: str, user: dict = Depends(auth.current_user)):
     """Permanently delete a single file from Needs Review."""
     path = f"{settings.dropbox_needs_review_path}/{filename}"
     dropbox_client.delete(path)
+    activity_log.record(user, "deleted", ticker=None, filename=filename)
     return {"status": "deleted", "filename": filename}
+
+
+@router.get("/needs-review/{filename}/thumbnail")
+def get_needs_review_thumbnail(filename: str):
+    """Same as get_ticker_file_thumbnail() above, for a file still sitting
+    in Needs Review rather than filed under a ticker."""
+    path = f"{settings.dropbox_needs_review_path}/{filename}"
+    thumbnail = thumbnails.get_thumbnail(path, filename)
+    if thumbnail is None:
+        raise HTTPException(status_code=404, detail="No preview available for this file type")
+    return Response(content=thumbnail, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
+@router.get("/needs-review/{filename}/open-link")
+def get_needs_review_open_link(filename: str):
+    """Same as get_ticker_file_open_link() above, for a file still sitting
+    in Needs Review rather than filed under a ticker."""
+    path = f"{settings.dropbox_needs_review_path}/{filename}"
+    return {"url": dropbox_client.get_shareable_link(path)}
 
 
 @router.post("/needs-review/{filename}/assign")
 def assign_needs_review_file(
-    filename: str, ticker: str, target_status: str | None = None, force: bool = False, skip_category: bool = False
+    filename: str,
+    ticker: str,
+    target_status: str | None = None,
+    force: bool = False,
+    skip_category: bool = False,
+    user: dict = Depends(auth.current_user),
 ):
     """
     Manually assign a Needs Review file to a ticker.
 
-    If the typed value ends with a registered category suffix (see
-    category_routing.py), it's routed straight into that category folder
-    — same as the upload flow — with no ticker matching/confirmation.
-    `skip_category=true` bypasses this check specifically — used when the
-    caller has already been offered this as one option (alongside a typo
-    suggestion and "create a new ticker anyway" — see the suffix-typo
-    guardrail below) and explicitly chose to create a literal new ticker
-    instead, so a suffix match can't silently steer that choice back into
-    the theme folder.
+    If the typed value contains a `(.SUFFIX)` marker — parentheses
+    required, e.g. "MCR (.TO)" — matching a registered theme folder (see
+    category_routing.py), it's routed straight into that category folder,
+    same as the upload flow, with no ticker matching/confirmation. A bare
+    "MCR.TO" (no parens) is NEVER treated as a category candidate here
+    either, for the same reason as the upload flow — it's indistinguishable
+    from a real ticker's own exchange suffix. `skip_category=true` bypasses
+    this check specifically — used when the caller has already been
+    offered "create a literal new ticker anyway" (see the new-ticker branch
+    below) and explicitly chose that, so a marker match can't silently
+    steer that choice back into the theme folder.
 
     If the typed ticker case-insensitively matches a real existing ticker,
     it's normalized to that ticker's real casing and assigned directly. If
     it doesn't match but has close look-alikes, assignment is held and the
     caller must resubmit with `force=true` to confirm creating/using that
     ticker anyway — the same typo safety net the upload flow gets, since a
-    manually-typed ticker is just as easy to fat-finger as a filename. If
-    the candidate also carries a suffix matching a theme folder, the
-    response includes `category_folder` too, so the caller can offer that
-    as a third choice alongside the typo suggestion(s) and "create new."
+    manually-typed ticker is just as easy to fat-finger as a filename.
 
     If the typed ticker doesn't match anything real and isn't close to
     anything either, it's still a genuinely new ticker — but rather than
@@ -583,9 +766,9 @@ def assign_needs_review_file(
 
     # Real-ticker match is checked first, no exceptions — an established
     # ticker can never be hijacked by category routing. Only once that's
-    # ruled out is the suffix checked on its own, free to match regardless
-    # of what other tickers might share it (see category_routing.py and
-    # upload_file()'s matching comment for the full reasoning).
+    # ruled out is the `(.SUFFIX)` marker checked on its own (see
+    # category_routing.find_category_tag() and upload_file()'s matching
+    # comment for the full reasoning).
     resolution = ticker_registry.resolve_ticker(ticker, known)
     if resolution["kind"] == "matched":
         ticker = resolution["ticker"]
@@ -593,33 +776,20 @@ def assign_needs_review_file(
         from_path = f"{settings.dropbox_needs_review_path}/{filename}"
         to_path = f"{ticker_registry.folder_path_for_status(status)}/{ticker}/{filename}"
         dropbox_client.move(from_path, to_path)
+        activity_log.record(user, "assigned", ticker=ticker, filename=filename)
         return {"status": "assigned", "ticker": ticker}
 
-    # Typo guardrail for a suffixed ticker (e.g. typing "KBS.BB" when the
-    # real ticker is "ZBQ.BB") — same reasoning as upload_file(), and
-    # skippable with force=true just like the general typo/new-ticker
-    # checks below.
-    if not force:
-        close_suffixed = find_close_suffixed_ticker_matches(ticker, list(known.keys()))
-        if close_suffixed:
-            return {
-                "status": "confirm_needed",
-                "requested_ticker": ticker,
-                "suggestions": close_suffixed,
-                **_category_alternative_for(ticker),
-            }
-
     if not skip_category:
-        category_match = category_routing.split_category_suffix(ticker, category_routing.get_category_folders())
-        if category_match:
-            base_ticker, category_folder = category_match
+        category_folder = category_routing.find_category_tag(ticker, category_routing.get_category_folders())
+        if category_folder:
             from_path = f"{settings.dropbox_needs_review_path}/{filename}"
             to_path = f"{category_folder}/{filename}"
             dropbox_client.move(from_path, to_path)
+            category_name = category_folder.rsplit("/", 1)[-1]
+            activity_log.record(user, "assigned", ticker=category_name, filename=filename)
             return {
                 "status": "assigned_category",
-                "ticker": base_ticker,
-                "category_folder": category_folder.rsplit("/", 1)[-1],
+                "category_folder": category_name,
             }
 
     if not force:
@@ -632,4 +802,5 @@ def assign_needs_review_file(
     from_path = f"{settings.dropbox_needs_review_path}/{filename}"
     to_path = f"{ticker_registry.folder_path_for_status(status)}/{ticker}/{filename}"
     dropbox_client.move(from_path, to_path)
+    activity_log.record(user, "assigned", ticker=ticker, filename=filename)
     return {"status": "assigned", "ticker": ticker}

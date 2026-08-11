@@ -18,6 +18,10 @@ from app.config import settings
 # this process rather than reconnecting every call (see get_client()).
 _client: dropbox.Dropbox | None = None
 
+# Cached Dropbox Business team ID the service account belongs to — see
+# get_team_id().
+_team_id: str | None = None
+
 # System/junk files that show up in real folder listings but should never
 # be treated as real research files or tickers (see list_folder()).
 _JUNK_NAMES = {".ds_store"}  # macOS folder-metadata file
@@ -52,6 +56,22 @@ def get_client() -> dropbox.Dropbox:
     root_namespace_id = base_client.users_get_current_account().root_info.root_namespace_id
     _client = base_client.with_path_root(dropbox.common.PathRoot.root(root_namespace_id))
     return _client
+
+
+def get_team_id() -> str:
+    """
+    The Dropbox Business team ID the service account (and therefore every
+    real Your Firm research folder) belongs to. Used by app/services/
+    auth.py to verify a per-user sign-in is actually someone on that same
+    team, not just any Dropbox account — access is exactly "whoever has
+    already been given a real Dropbox seat on this team," no separate
+    allow-list to maintain here. Cached the same way get_client() is.
+    """
+    global _team_id
+    if _team_id is None:
+        account = get_client().users_get_current_account()
+        _team_id = account.team.id
+    return _team_id
 
 
 def _is_junk(name: str) -> bool:
@@ -104,7 +124,7 @@ def list_folder(path: str) -> list[dict]:
     ]
 
 
-def list_folder_recursive(path: str) -> list[dict]:
+def list_folder_recursive(path: str) -> dict:
     """
     List every FILE inside a Dropbox folder, at any depth, filtering out
     system/junk files the same way list_folder() does. Unlike
@@ -117,16 +137,22 @@ def list_folder_recursive(path: str) -> list[dict]:
     folder uploaded with subfolders preserved can be displayed the same
     way it was uploaded.
 
-    Only files are returned, not folder entries themselves — an empty
-    subfolder (nothing inside it at any depth) has nothing to show either
-    way. Same not-found-is-empty and pagination behavior as list_folder().
+    Returns `{"files": [...], "folders": [...]}` — `folders` is the
+    relative_path of every real subfolder at any depth, INCLUDING ones
+    with nothing inside them at all. A subfolder that already has a file
+    somewhere inside it is already implicitly discoverable from that
+    file's own `relative_path`, but a genuinely empty one (e.g. just
+    created via the app's own "+ New folder" button, or in Dropbox
+    directly) has no file to be inferred from — this is the only way the
+    frontend can know it exists at all. Same not-found-is-empty and
+    pagination behavior as list_folder().
     """
     client = get_client()
     try:
         result = client.files_list_folder(path, recursive=True)
     except dropbox.exceptions.ApiError as error:
         if error.error.is_path() and error.error.get_path().is_not_found():
-            return []
+            return {"files": [], "folders": []}
         raise
     entries = list(result.entries)
     while result.has_more:
@@ -135,17 +161,38 @@ def list_folder_recursive(path: str) -> list[dict]:
 
     base_prefix = f"{path.rstrip('/')}/"
     files = []
+    folders = []
     for entry in entries:
-        if not isinstance(entry, dropbox.files.FileMetadata) or _is_junk(entry.name):
+        if _is_junk(entry.name):
+            continue
+        if isinstance(entry, dropbox.files.FolderMetadata):
+            # path_display here is the folder's OWN full path (unlike a
+            # file, where the portion after stripping the filename gives
+            # its *containing* folder) — strip the base prefix directly.
+            if entry.path_display.startswith(base_prefix):
+                folders.append(entry.path_display[len(base_prefix) :])
+            continue
+        if not isinstance(entry, dropbox.files.FileMetadata):
             continue
         # path_display carries the file's full path from the root; the
         # portion between the base folder and the file's own name is its
         # subfolder path within `path`.
         full_dir = entry.path_display.rsplit("/", 1)[0]
         relative_path = full_dir[len(base_prefix) :] if full_dir.startswith(base_prefix) else ""
-        files.append({"name": entry.name, "relative_path": relative_path, "content_hash": entry.content_hash})
+        # size/modified come straight off the same files_list_folder
+        # response already being read here — no extra API call needed to
+        # support sorting by them (see files.py's list_files_for_ticker()).
+        files.append(
+            {
+                "name": entry.name,
+                "relative_path": relative_path,
+                "content_hash": entry.content_hash,
+                "size": entry.size,
+                "modified": entry.server_modified.isoformat(),
+            }
+        )
 
-    return files
+    return {"files": files, "folders": folders}
 
 
 def compute_content_hash(content: bytes) -> str:
@@ -168,6 +215,65 @@ def compute_content_hash(content: bytes) -> str:
     for offset in range(0, len(content), block_size):
         block_hashes += hashlib.sha256(content[offset : offset + block_size]).digest()
     return hashlib.sha256(block_hashes).hexdigest()
+
+
+def download(path: str) -> bytes:
+    """Download a file's raw content from Dropbox — used by
+    app/services/thumbnails.py for an actual .pdf file (no conversion
+    needed, unlike the Word/PowerPoint-family types that go through
+    get_preview() below)."""
+    client = get_client()
+    _, response = client.files_download(path)
+    return response.content
+
+
+def get_preview(path: str) -> bytes:
+    """
+    Dropbox's own rendered preview of a document — a PDF for Word/
+    PowerPoint-family files (see thumbnails.py's extension list), HTML for
+    spreadsheets (not used here — see thumbnails.py for why Excel/CSV
+    don't get a real thumbnail). Different from get_image_thumbnail()
+    below, which only works on files that are already actual images.
+    """
+    client = get_client()
+    _, response = client.files_get_preview(path)
+    return response.content
+
+
+def get_image_thumbnail(path: str) -> bytes | None:
+    """
+    A small JPEG thumbnail for a file that's already an actual image
+    (jpg/png/gif/etc — see dropbox.files.ThumbnailV2Arg's supported
+    formats). Returns None rather than raising if Dropbox can't produce
+    one (wrong type, corrupt, too large) — a missing thumbnail is an
+    expected, normal outcome here, not an error condition."""
+    client = get_client()
+    try:
+        _, response = client.files_get_thumbnail_v2(
+            dropbox.files.PathOrLink.path(path),
+            format=dropbox.files.ThumbnailFormat.jpeg,
+            size=dropbox.files.ThumbnailSize.w256h256,
+        )
+        return response.content
+    except dropbox.exceptions.ApiError:
+        return None
+
+
+def get_shareable_link(path: str) -> str:
+    """
+    A Dropbox web URL that opens `path` in Dropbox's own preview UI — used
+    for "open in Dropbox" (see files.py). Reuses an existing shared link
+    for this exact file if one's already been created (by a previous
+    click here, or manually in Dropbox itself) rather than creating a new
+    one on every request — `direct_only=True` so this only matches a link
+    on the file itself, not one inherited from a parent folder.
+    """
+    client = get_client()
+    existing = client.sharing_list_shared_links(path=path, direct_only=True)
+    if existing.links:
+        return existing.links[0].url
+    link = client.sharing_create_shared_link_with_settings(path)
+    return link.url
 
 
 def upload_file(path: str, content: bytes, overwrite: bool = False) -> str:

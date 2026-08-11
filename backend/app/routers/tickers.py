@@ -3,10 +3,10 @@
 # Review assignment) live in files.py instead — this split roughly matches
 # "things about a ticker/folder" vs. "things about an individual file".
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import settings
-from app.services import category_routing, dropbox_client, ticker_registry
+from app.services import activity_log, auth, category_routing, dropbox_client, ticker_registry
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
@@ -58,8 +58,22 @@ def list_category_suffix_warnings():
     return category_routing.find_duplicate_category_suffixes()
 
 
+@router.get("/activity")
+def list_ticker_activity():
+    """
+    Most recent *ticker-level* action (created/renamed/moved/deleted) for
+    every known ticker/theme folder, in one batch query — see
+    activity_log.py for why this exists (Dropbox's own "modified by" only
+    reflects activity done directly in Dropbox, not through this app).
+    Meant to be fetched once and merged into the ticker list client-side,
+    rather than one request per ticker.
+    """
+    known = ticker_registry.get_known_folders()
+    return activity_log.latest_for_tickers(list(known.keys()))
+
+
 @router.post("/create")
-def create_ticker(ticker: str, target_status: str):
+def create_ticker(ticker: str, target_status: str, user: dict = Depends(auth.current_user)):
     """
     Create an empty ticker folder — no files. Only meaningful use case:
     someone drags in a whole folder with no files inside it at all, and
@@ -81,6 +95,7 @@ def create_ticker(ticker: str, target_status: str):
 
     path = f"{ticker_registry.folder_path_for_status(target_status)}/{ticker}"
     dropbox_client.create_folder(path)
+    activity_log.record(user, "created", ticker=ticker, detail=f"status={target_status}")
 
     result = {"status": "created", "ticker": ticker, "target_status": target_status}
     # See category_routing.check_suffix_collision_for() — this is exactly
@@ -109,7 +124,7 @@ def resolve_ticker_name(name: str):
 
 
 @router.post("/{ticker}/move")
-def move_ticker(ticker: str, target_status: str):
+def move_ticker(ticker: str, target_status: str, user: dict = Depends(auth.current_user)):
     """
     Move a ticker's whole folder between Active, Inactive, and Historicals
     in Dropbox.
@@ -137,11 +152,12 @@ def move_ticker(ticker: str, target_status: str):
     from_path = f"{ticker_registry.folder_path_for_status(current_status)}/{ticker}"
     to_path = f"{ticker_registry.folder_path_for_status(target_status)}/{ticker}"
     dropbox_client.move(from_path, to_path)
+    activity_log.record(user, "moved", ticker=ticker, detail=f"to {target_status}")
     return {"status": "moved", "ticker": ticker, "new_status": target_status}
 
 
 @router.post("/{ticker}/rename")
-def rename_ticker(ticker: str, new_name: str):
+def rename_ticker(ticker: str, new_name: str, user: dict = Depends(auth.current_user)):
     """
     Rename a ticker or theme folder in place — same status/parent folder,
     just a different name. Works on theme folders too (see
@@ -163,11 +179,15 @@ def rename_ticker(ticker: str, new_name: str):
 
     base_path = ticker_registry.folder_path_for_status(status)
     dropbox_client.move(f"{base_path}/{ticker}", f"{base_path}/{new_name}")
+    # Logged under the *new* name — that's what future lookups (list
+    # views, file activity) will actually query by, since the old name no
+    # longer exists as a real folder.
+    activity_log.record(user, "renamed", ticker=new_name, detail=f"from {ticker}")
     return {"status": "renamed", "old_name": ticker, "new_name": new_name}
 
 
 @router.delete("/{ticker}")
-def delete_ticker(ticker: str):
+def delete_ticker(ticker: str, user: dict = Depends(auth.current_user)):
     """
     Permanently delete an entire ticker's folder — and every file inside
     it — from Dropbox. This is the most destructive endpoint in the app;
@@ -181,4 +201,5 @@ def delete_ticker(ticker: str):
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     path = f"{ticker_registry.folder_path_for_status(status)}/{ticker}"
     dropbox_client.delete(path)
+    activity_log.record(user, "deleted", ticker=ticker)
     return {"status": "deleted", "ticker": ticker}
