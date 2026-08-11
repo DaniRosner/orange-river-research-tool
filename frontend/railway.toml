@@ -8,7 +8,11 @@
 
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm ci && npm run build"
+# Nixpacks already runs "npm ci" as its own separate install step before
+# this — repeating it here (as "npm ci && npm run build") raced against
+# the install step's cache-mounted node_modules/.cache directory and
+# failed with EBUSY on the first real deploy.
+buildCommand = "npm run build"
 
 [deploy]
 startCommand = "npx serve -s dist -l $PORT"
