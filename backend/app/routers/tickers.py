@@ -6,7 +6,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import settings
-from app.services import activity_log, auth, category_routing, dropbox_client, ticker_registry
+from app.services import activity_log, auth, category_routing, dropbox_client, logos, ticker_registry
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
@@ -70,6 +70,20 @@ def list_ticker_activity():
     """
     known = ticker_registry.get_known_folders()
     return activity_log.latest_for_tickers(list(known.keys()))
+
+
+@router.get("/logos")
+def list_ticker_logos():
+    """
+    {ticker: logo_url} for every known ticker that Finnhub could resolve a
+    company logo for — see logos.py for why coverage is genuinely partial
+    (foreign-exchange-suffixed and small-cap/unlisted tickers mostly won't
+    have one). Meant to be fetched once and merged into the ticker list
+    client-side, same pattern as /activity above; a ticker with no entry
+    here just keeps the plain folder icon.
+    """
+    known = ticker_registry.get_known_folders()
+    return logos.get_logos_for(list(known.keys()))
 
 
 @router.post("/create")

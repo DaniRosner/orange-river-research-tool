@@ -139,6 +139,11 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   // just Dropbox's own "modified by". Refreshed alongside the tab data
   // below (same triggers: anything that could actually change it).
   const [tickerActivity, setTickerActivity] = useState({})
+  // {tickerName: logoUrl}, only for tickers a logo was actually found for
+  // — see api.getTickerLogos(). Refreshed alongside everything else below;
+  // a brand-new ticker just shows the plain folder icon until the next
+  // refresh happens to look it up (never blocks on this specifically).
+  const [tickerLogos, setTickerLogos] = useState({})
 
   // Re-fetches one tab's list into the cache — both the module-level copy
   // (so it survives an unmount) and component state (so it re-renders).
@@ -162,6 +167,7 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   function refreshAll() {
     TABS.forEach(refreshTab)
     api.getTickerActivity().then(setTickerActivity).catch(() => {})
+    api.getTickerLogos().then(setTickerLogos).catch(() => {})
     // Anything that reaches refreshAll (an upload, an assign, a delete)
     // could have created, moved, or removed a ticker — any of which could
     // change whether a suffix collision exists, so let App know to
@@ -475,13 +481,14 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   // preview folder contents either, and it'd cost a real request per
   // ticker to build here for no real benefit).
   function renderTickerCard(ticker) {
+    const logoUrl = tickerLogos[ticker]
     return (
       <div className="card" key={ticker}>
         <div
-          className="card__preview card__preview--icon"
+          className={`card__preview ${logoUrl ? 'card__preview--logo' : 'card__preview--icon'}`}
           onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}
         >
-          📁
+          {logoUrl ? <img src={logoUrl} alt="" className="card__logo-img" /> : '📁'}
           {selectionMode && (
             <input
               type="checkbox"
@@ -590,7 +597,11 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
           </span>
         ) : (
           <span className="data-table__name">
-            <span className="data-table__folder-icon">📁</span>
+            {tickerLogos[ticker] ? (
+              <img src={tickerLogos[ticker]} alt="" className="data-table__folder-icon data-table__folder-logo" />
+            ) : (
+              <span className="data-table__folder-icon">📁</span>
+            )}
             <span
               className="data-table__name-text"
               onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}

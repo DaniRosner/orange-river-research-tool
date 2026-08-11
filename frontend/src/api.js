@@ -53,6 +53,12 @@ export const api = {
   // every ticker with logged activity (created/renamed/moved/deleted
   // through this app) — see backend/app/services/activity_log.py.
   getTickerActivity: () => request('/tickers/activity'),
+  // {tickerName: logoUrl} — only for tickers Finnhub could resolve a
+  // company logo for (see backend/app/services/logos.py); a ticker with
+  // no entry here just isn't in the object at all, not present with a
+  // null value. Coverage is genuinely partial — foreign-exchange-suffixed
+  // and small-cap tickers mostly won't have one.
+  getTickerLogos: () => request('/tickers/logos'),
   // {files: [...], folders: [...]} — `folders` includes empty subfolders
   // (e.g. from createSubfolder below) that have no file to be inferred
   // from otherwise.
