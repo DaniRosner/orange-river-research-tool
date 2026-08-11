@@ -99,8 +99,7 @@ in the Railway dashboard and its own `railway.toml` (`backend/railway.toml`,
    point `DROPBOX_ACTIVE_PATH`, `DROPBOX_INACTIVE_PATH`,
    `DROPBOX_HISTORICALS_PATH`, and `DROPBOX_NEEDS_REVIEW_PATH` at the real
    data, not the Dev Sandbox — see "Testing against sandbox data vs. real
-   data" below for the exact values. Set `DROPBOX_REDIRECT_URI` and
-   `FRONTEND_URL` to the deployed URLs, not localhost.
+   data" below for the exact values.
 3. **Attach a Railway Volume to the backend service**, mounted at `/data`,
    and set `ACTIVITY_DB_PATH=/data/activity.db` in that service's
    variables. Without this, the activity log (`backend/data/activity.db`)
@@ -109,16 +108,44 @@ in the Railway dashboard and its own `railway.toml` (`backend/railway.toml`,
    would silently reset each time the backend redeploys. This is separate
    from Dropbox itself, which is the actual file storage and always
    persists regardless.
-4. On the frontend service, set `VITE_API_BASE_URL` (a **build-time**
-   variable — Vite bakes it into the built JS, it isn't read at runtime) to
-   the backend service's public Railway URL.
-5. Once both services have a public URL, go back to the backend's
-   `DROPBOX_REDIRECT_URI` and the Dropbox App Console's allowed OAuth
-   redirect URIs and make sure they match exactly — sign-in fails silently
-   otherwise.
+4. The frontend service doesn't need `VITE_API_BASE_URL` set — it serves
+   the app through Caddy (see `frontend/Caddyfile`), which reverse-proxies
+   `/api/*` to the backend over Railway's private network
+   (`backend.railway.internal`, whatever port the backend actually binds
+   to — check its logs if this ever changes). `api.js` defaults to the
+   relative `/api`, which is exactly what that proxy expects.
+5. Once both services have a public URL, set the backend's
+   `DROPBOX_REDIRECT_URI` to **the frontend's own domain**, not the
+   backend's — e.g. `https://<frontend-domain>/api/auth/callback` — and
+   add that exact URL to the Dropbox App Console's allowed OAuth redirect
+   URIs. See "Cross-origin auth and the Firefox sign-in fix" below for why
+   this has to be the frontend's domain specifically.
 
 **Ongoing redeploys**: pushing to the connected branch triggers Railway to
 rebuild both services automatically; no manual steps beyond that.
+
+## Cross-origin auth and the Firefox sign-in fix
+
+Sign-in used to send the browser directly to the backend's own domain for
+both `/auth/login` and `/auth/callback`, with the frontend calling the
+backend's public URL directly for every API request afterward. That works
+in Chrome/Edge, but Firefox's Total Cookie Protection (on by default) blocks
+it: the session cookie gets set on the backend's domain, and a *different*
+domain (the frontend) can never read it back on a cross-site fetch, even
+with `SameSite=None; Secure` set correctly. The failure mode looks exactly
+like "sign-in completes, but you land back signed out" — Safari's ITP
+enforces something similar, and Chrome is moving the same direction, so
+this wasn't a Firefox-only fix.
+
+The actual fix: eliminate the cross-site relationship entirely. The
+frontend now reverse-proxies `/api/*` to the backend (Vite's dev-server
+proxy locally — see `vite.config.js` — and Caddy in production — see
+`frontend/Caddyfile`), so from the browser's point of view there is only
+ever one origin, for both the OAuth callback (where the cookie gets set)
+and every subsequent API call (where it gets read back). That's why
+`DROPBOX_REDIRECT_URI` points at the *frontend's* domain, not the
+backend's — the callback has to land on the same origin the cookie will
+later be read from, or nothing here actually changes.
 
 ## Dropbox app ownership handoff
 

@@ -1,7 +1,15 @@
 // Thin wrapper around the backend's HTTP API. Every function here just
 // builds a request and returns parsed JSON — no business logic lives in
 // this file; that all happens on the backend (see backend/app/routers/).
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+//
+// Deliberately a relative path, not the backend's own absolute URL — the
+// backend is reverse-proxied under this same origin's /api (see
+// vite.config.js locally, frontend/Caddyfile in production) specifically
+// so the session cookie is always same-site. A cross-site cookie between
+// two separate domains gets silently dropped by Firefox's Total Cookie
+// Protection (and eventually Chrome/Safari too) — see the "Firefox sign-in"
+// note in README.md for the full story.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 // Shared fetch helper: builds the full URL, throws on any non-2xx response
 // (so callers can just `await` and `catch`), and parses the JSON body.

@@ -2,9 +2,12 @@
 # Directory to `frontend` in the Railway dashboard so this file is picked
 # up — see README.md "Redeploying" for the full setup steps.
 #
-# VITE_API_BASE_URL is baked into the built JS at build time (Vite
-# convention), not read at runtime — it must be set as a build-time
-# variable on this service, pointing at the backend service's public URL.
+# Served by Caddy (see Caddyfile), not a plain static server — it reverse
+# proxies /api/* to the backend over Railway's private network, which is
+# what keeps the whole app on one origin from the browser's point of view.
+# See api.js for why that matters (Firefox's Total Cookie Protection).
+# VITE_API_BASE_URL doesn't need to be set at all anymore; api.js defaults
+# to the relative "/api" this proxy expects.
 
 [build]
 builder = "NIXPACKS"
@@ -15,6 +18,6 @@ builder = "NIXPACKS"
 buildCommand = "npm run build"
 
 [deploy]
-startCommand = "npx serve -s dist -l $PORT"
+startCommand = "caddy run --config Caddyfile --adapter caddyfile"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3

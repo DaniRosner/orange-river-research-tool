@@ -1,0 +1,25 @@
+# Serves the built frontend and reverse-proxies /api/* to the backend
+# over Railway's private network — this is what keeps the session cookie
+# same-site in every browser (see api.js for the full "why"). Nixpacks
+# provisions Caddy automatically for a Node static-site build; this file
+# replaces its default with our own routing.
+
+:{$PORT}
+
+# Backend calls: strip the leading /api (the backend's own routes don't
+# have it, e.g. /api/tickers/active -> /tickers/active) and forward over
+# Railway's internal network, not the public internet.
+route /api/* {
+	uri strip_prefix /api
+	reverse_proxy backend.railway.internal:8080
+}
+
+# Everything else: the built static app. try_files falls back to
+# index.html for any path that isn't a real file, so React Router's
+# client-side routes (e.g. /ticker/active/ZBQ) work on a direct load or
+# refresh, not just via in-app navigation.
+route {
+	root * dist
+	try_files {path} /index.html
+	file_server
+}
