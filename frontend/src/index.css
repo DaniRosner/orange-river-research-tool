@@ -520,6 +520,24 @@ li {
   font-size: 34px;
 }
 
+/* When no real logo was found (see tickerMonogram) — a solid-color chip
+   with the ticker's symbol (or a theme folder's initials), so a folder
+   without a logo still reads as deliberate rather than the generic system
+   folder glyph. Font-size is set inline per-instance (see
+   monogramFontSize) since a full ticker symbol can be much longer than a
+   theme folder's fixed 2-letter initials — no single CSS size fits both. */
+.card__preview--monogram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0 10px;
+  text-align: center;
+}
+
 /* When a company logo was found (see tickerLogos) — a plain white tile
    instead of the orange fill, so the logo's own brand colors don't clash
    with it, same idea as how most apps show a logo on a neutral chip
@@ -587,16 +605,28 @@ li {
   color: var(--ink-soft);
 }
 
+/* Stacked (input on its own row, Save/Cancel below), not a single flex
+   row — the card is only ~160px wide, nowhere near enough to fit a real
+   text input plus two buttons side by side without either crushing the
+   input down to nothing or overflowing the card's own edge. */
 .card__rename {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
   padding: 8px 10px 10px;
 }
 
 .card__rename input {
+  width: 100%;
+}
+
+.card__rename-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.card__rename-actions button {
   flex: 1;
-  min-width: 0;
 }
 
 /* ---------- Data table (ticker detail file list + ticker list, List view) ---------- */
@@ -701,6 +731,21 @@ li {
   border-radius: var(--radius-sm);
   object-fit: contain;
   padding: 3px;
+}
+
+/* The initials variant, when no real logo was found — same reasoning as
+   .card__preview--monogram. Stays inside the same fixed 32px box as the
+   icon/logo variants (see .data-table__folder-icon) so names still line
+   up across rows; font-size is set inline per-instance instead (see
+   monogramFontSize) since a full ticker symbol needs to shrink more than
+   a theme folder's fixed 2-letter initials to fit that box at all. */
+.data-table__folder-monogram {
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  overflow: hidden;
 }
 
 .data-table__name-text {

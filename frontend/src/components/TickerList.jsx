@@ -6,6 +6,7 @@ import { formatDate } from '../formatters.js'
 import RowMenu from './RowMenu.jsx'
 import FileThumbnail from './FileThumbnail.jsx'
 import { TABS } from '../tabSlugs.js'
+import { tickerMonogram, monogramFontSize } from '../monogram.js'
 
 // The main list view: a name filter plus two very different kinds of list
 // depending on the tab. Active/Inactive show clickable tickers (folders).
@@ -37,6 +38,16 @@ const FETCHERS = {
 // visit to a tab renders as a blank list with zero feedback rather than
 // "still loading."
 const itemsCache = { Active: null, Inactive: null, Historicals: null, 'Needs Review': null }
+
+// Same idea as itemsCache above, for the two things fetched once alongside
+// every tab's list — activity captions and ticker logos. Without a
+// module-level cache for these too, every "back" click out of a ticker's
+// detail view remounted TickerList with these reset to `{}`, so every
+// already-loaded logo/caption would visibly flash back to its fallback
+// (plain folder icon / no caption) and then pop back in a moment later,
+// even though nothing had actually changed.
+let tickerActivityCache = {}
+let tickerLogosCache = {}
 
 function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }) {
   // Every tab's list, keyed by tab name, seeded from the cache above so a
@@ -138,12 +149,12 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   // app* — see backend/app/services/activity_log.py for why this isn't
   // just Dropbox's own "modified by". Refreshed alongside the tab data
   // below (same triggers: anything that could actually change it).
-  const [tickerActivity, setTickerActivity] = useState({})
+  const [tickerActivity, setTickerActivity] = useState(() => tickerActivityCache)
   // {tickerName: logoUrl}, only for tickers a logo was actually found for
   // — see api.getTickerLogos(). Refreshed alongside everything else below;
   // a brand-new ticker just shows the plain folder icon until the next
   // refresh happens to look it up (never blocks on this specifically).
-  const [tickerLogos, setTickerLogos] = useState({})
+  const [tickerLogos, setTickerLogos] = useState(() => tickerLogosCache)
 
   // Re-fetches one tab's list into the cache — both the module-level copy
   // (so it survives an unmount) and component state (so it re-renders).
@@ -166,8 +177,14 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   // reason (an upload can do the same thing).
   function refreshAll() {
     TABS.forEach(refreshTab)
-    api.getTickerActivity().then(setTickerActivity).catch(() => {})
-    api.getTickerLogos().then(setTickerLogos).catch(() => {})
+    api.getTickerActivity().then((data) => {
+      tickerActivityCache = data
+      setTickerActivity(data)
+    }).catch(() => {})
+    api.getTickerLogos().then((data) => {
+      tickerLogosCache = data
+      setTickerLogos(data)
+    }).catch(() => {})
     // Anything that reaches refreshAll (an upload, an assign, a delete)
     // could have created, moved, or removed a ticker — any of which could
     // change whether a suffix collision exists, so let App know to
@@ -425,12 +442,21 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
       return
     }
     setRenamingTicker(null)
+    // Optimistic: swap the name in place immediately, same idea as
+    // handleMoveTicker above — a rename never changes which tab a ticker
+    // is in, just its label, so this is a remove+add within the same tab.
+    // Its activity caption/logo will show blank/fallback for a moment
+    // until refreshAll()'s fetches resolve (a genuinely new name needs a
+    // fresh logo lookup regardless), same as a brand-new ticker.
+    removeFromTab(activeTab, [ticker])
+    addToTab(activeTab, newName)
     try {
       await api.renameTicker(ticker, newName)
       setListMessage(`${ticker} renamed to ${newName}.`)
       refreshAll()
     } catch (err) {
       setListMessage(`Failed to rename ${ticker}: ${err.message}`)
+      refreshAll()
     }
   }
 
@@ -482,13 +508,18 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   // ticker to build here for no real benefit).
   function renderTickerCard(ticker) {
     const logoUrl = tickerLogos[ticker]
+    const monogram = tickerMonogram(ticker)
     return (
       <div className="card" key={ticker}>
         <div
-          className={`card__preview ${logoUrl ? 'card__preview--logo' : 'card__preview--icon'}`}
+          className={`card__preview ${logoUrl ? 'card__preview--logo' : 'card__preview--monogram'}`}
           onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}
         >
-          {logoUrl ? <img src={logoUrl} alt="" className="card__logo-img" /> : '📁'}
+          {logoUrl ? (
+            <img src={logoUrl} alt="" className="card__logo-img" />
+          ) : (
+            <span style={{ fontSize: monogramFontSize(monogram, 28) }}>{monogram}</span>
+          )}
           {selectionMode && (
             <input
               type="checkbox"
@@ -503,8 +534,10 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
         {renamingTicker === ticker ? (
           <div className="card__rename">
             <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} autoFocus />
-            <button onClick={() => handleRenameTicker(ticker)}>Save</button>
-            <button onClick={() => setRenamingTicker(null)}>Cancel</button>
+            <div className="card__rename-actions">
+              <button onClick={() => handleRenameTicker(ticker)}>Save</button>
+              <button onClick={() => setRenamingTicker(null)}>Cancel</button>
+            </div>
           </div>
         ) : confirmDeleteTicker === ticker ? (
           <div className="card__confirm">
@@ -600,7 +633,12 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
             {tickerLogos[ticker] ? (
               <img src={tickerLogos[ticker]} alt="" className="data-table__folder-icon data-table__folder-logo" />
             ) : (
-              <span className="data-table__folder-icon">📁</span>
+              <span
+                className="data-table__folder-icon data-table__folder-monogram"
+                style={{ fontSize: monogramFontSize(tickerMonogram(ticker), 10.5) }}
+              >
+                {tickerMonogram(ticker)}
+              </span>
             )}
             <span
               className="data-table__name-text"
