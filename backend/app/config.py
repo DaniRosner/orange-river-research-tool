@@ -43,11 +43,11 @@ class Settings(BaseSettings):
     activity_db_path: str = "data/activity.db"
 
     # Used to look up each ticker's company logo (see
-    # app/services/logos.py) — free-tier Finnhub account, registered under
-    # the user's email. Coverage is genuinely partial (weak for small-cap and
-    # foreign-exchange-listed tickers); a ticker with no match just keeps
-    # the plain folder icon.
-    finnhub_api_key: str = ""
+    # app/services/logos.py) — free-tier Logo.dev publishable key. Coverage
+    # is very good but not universal (small-cap/unlisted names, or a
+    # foreign exchange suffix Logo.dev doesn't itself recognize); a ticker
+    # with no match just keeps the plain folder icon.
+    logo_dev_api_key: str = ""
 
     class Config:
         env_file = "../.env"

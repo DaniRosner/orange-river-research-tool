@@ -75,10 +75,11 @@ def list_ticker_activity():
 @router.get("/logos")
 def list_ticker_logos():
     """
-    {ticker: logo_url} for every known ticker that Finnhub could resolve a
-    company logo for — see logos.py for why coverage is genuinely partial
-    (foreign-exchange-suffixed and small-cap/unlisted tickers mostly won't
-    have one). Meant to be fetched once and merged into the ticker list
+    {ticker: logo_url} for every known ticker that Logo.dev could resolve a
+    company logo for — see logos.py for why coverage, while good, still
+    isn't universal (small-cap/unlisted tickers, or a suffix Logo.dev
+    doesn't itself recognize as a real exchange code, mostly won't have
+    one). Meant to be fetched once and merged into the ticker list
     client-side, same pattern as /activity above; a ticker with no entry
     here just keeps the plain folder icon.
     """
