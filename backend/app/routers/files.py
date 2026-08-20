@@ -633,6 +633,57 @@ def delete_subfolder(ticker: str, relative_path: str, user: dict = Depends(auth.
     return {"status": "deleted", "relative_path": relative_path}
 
 
+@router.post("/ticker/{ticker}/{filename}/move")
+def move_ticker_file(
+    ticker: str,
+    filename: str,
+    target_ticker: str,
+    relative_path: str | None = None,
+    target_relative_path: str | None = None,
+    user: dict = Depends(auth.current_user),
+):
+    """
+    Moves a single file to a different folder — a different subfolder of
+    the same ticker (pass the same `target_ticker` as `ticker`), or into a
+    different ticker entirely (its root, or one of its own subfolders).
+    `relative_path` is the file's current containing subfolder;
+    `target_relative_path` is the destination's — same convention as
+    everywhere else `relative_path` is used, empty/omitted meaning the
+    ticker's own root either way.
+
+    Auto-renames on a naming conflict at the destination rather than
+    failing outright (see dropbox_client.move()); the destination
+    subfolder is created first if it doesn't already exist, since unlike
+    upload, a plain move doesn't create missing parent folders on its own.
+    """
+    known = ticker_registry.get_known_folders()
+    status = known.get(ticker)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    target_status = known.get(target_ticker)
+    if target_status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {target_ticker}")
+
+    from_folder = f"{ticker_registry.folder_path_for_status(status)}/{ticker}"
+    if relative_path:
+        from_folder = f"{from_folder}/{relative_path}"
+    to_folder = f"{ticker_registry.folder_path_for_status(target_status)}/{target_ticker}"
+    if target_relative_path:
+        to_folder = f"{to_folder}/{target_relative_path}"
+        dropbox_client.ensure_folder(to_folder)
+
+    dropbox_client.move(f"{from_folder}/{filename}", f"{to_folder}/{filename}")
+    # Logged under the destination — same reasoning as rename_ticker
+    # logging under the new name: that's what future lookups (the file
+    # list, activity captions) will actually query by.
+    from_label = f"{ticker}/{relative_path}" if relative_path else ticker
+    activity_log.record(
+        user, "moved", ticker=target_ticker, filename=filename, relative_path=target_relative_path or "",
+        detail=f"from {from_label}",
+    )
+    return {"status": "moved", "filename": filename, "target_ticker": target_ticker}
+
+
 @router.delete("/ticker/{ticker}/{filename}")
 def delete_ticker_file(
     ticker: str, filename: str, relative_path: str | None = None, user: dict = Depends(auth.current_user)

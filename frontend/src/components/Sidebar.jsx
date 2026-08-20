@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import UploadButton from './UploadButton.jsx'
+import NewTickerButton from './NewTickerButton.jsx'
 import { api } from '../api.js'
 import { TABS, TAB_SLUGS, SLUGS_TO_TAB } from '../tabSlugs.js'
 import logo from '../assets/logo.png'
@@ -43,6 +44,7 @@ function Sidebar({ user, onUploaded, onLoggedOut }) {
         </button>
       </div>
       <UploadButton onUploaded={onUploaded} />
+      <NewTickerButton onCreated={onUploaded} />
       <nav className="sidebar__nav">
         {TABS.map((tab) => (
           <button

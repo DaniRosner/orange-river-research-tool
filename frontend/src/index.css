@@ -481,6 +481,27 @@ li {
   box-shadow: 0 1px 3px rgba(32, 32, 32, 0.12), 0 4px 10px rgba(32, 32, 32, 0.08);
 }
 
+/* Drag-and-drop of a file card onto a subfolder card (see TickerDetail's
+   handleFileDragStart/handleFolderDrop) — dims the file being dragged,
+   highlights whichever folder it's currently hovering over as a valid
+   drop target. */
+.card--dragging {
+  opacity: 0.5;
+}
+
+.card--drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* Dragging a file over the ticker-detail "Back" button — same highlight
+   idea as .card--drag-over, for navigating up a level mid-drag. */
+.back-button--drag-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
 .card__preview {
   position: relative;
   aspect-ratio: 3 / 4;
@@ -650,6 +671,17 @@ li {
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
+}
+
+/* Same drag-and-drop reasoning as .card--dragging/.card--drag-over above,
+   for the list-view rows. */
+.data-table__row--dragging {
+  opacity: 0.5;
+}
+
+.data-table__row--drag-over {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 /* Only applied while selection mode is on — adds the leading checkbox
@@ -1030,6 +1062,12 @@ li:last-child {
   font-size: 13.5px;
 }
 
+.confirm-dialog input[type='text'] {
+  display: block;
+  width: 100%;
+  margin-bottom: 10px;
+}
+
 .confirm-dialog ul {
   margin: 0 0 10px;
 }
@@ -1166,6 +1204,63 @@ li:last-child {
 .category-suffix-warning ul {
   margin: 0;
   padding-left: 18px;
+}
+
+/* Generic centered popup — same visual treatment as .suffix-warning-overlay/
+   -modal below (kept as its own pair since it's a fixed one-off warning),
+   for anything else that needs a real centered dialog rather than a panel
+   anchored under the button that opened it. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--paper);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 22px 26px;
+  width: 100%;
+  max-width: 360px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.modal h3 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+.modal p {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+
+.modal input[type='text'] {
+  display: block;
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.modal .modal__status-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modal .modal__status-choices button {
+  flex: 1;
+  min-width: 90px;
+}
+
+.modal .modal__cancel {
+  display: block;
+  margin: 14px 0 0 auto;
 }
 
 .suffix-warning-overlay {

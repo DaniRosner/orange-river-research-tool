@@ -201,6 +201,20 @@ export const api = {
       method: 'DELETE',
     })
   },
+
+  // Moves a single file to a different folder — a different subfolder of
+  // the same ticker (pass targetTicker === ticker), or into a different
+  // ticker entirely. relativePath/targetRelativePath are the file's
+  // current/destination containing subfolder — "" or omitted means the
+  // ticker's own root either way.
+  moveTickerFile: (ticker, filename, relativePath, targetTicker, targetRelativePath) => {
+    const params = new URLSearchParams({ target_ticker: targetTicker })
+    if (relativePath) params.set('relative_path', relativePath)
+    if (targetRelativePath) params.set('target_relative_path', targetRelativePath)
+    return request(`/files/ticker/${encodeURIComponent(ticker)}/${encodeURIComponent(filename)}/move?${params}`, {
+      method: 'POST',
+    })
+  },
   deleteNeedsReviewFile: (filename) =>
     request(`/files/needs-review/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
   deleteTicker: (ticker) => request(`/tickers/${encodeURIComponent(ticker)}`, { method: 'DELETE' }),

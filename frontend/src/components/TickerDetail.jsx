@@ -146,6 +146,30 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
   const [selectionMode, setSelectionMode] = useState(false)
   const [selected, setSelected] = useState(new Set())
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+  // Which single file (if any, identified by fileKey) currently has its
+  // "move to..." form showing, and what's currently chosen in it.
+  // `allTickerNames` is every known ticker/theme folder across all three
+  // statuses (not just this one) — lazily fetched the first time the
+  // dialog opens rather than on every visit to this screen, since it's
+  // only needed here.
+  const [movingFile, setMovingFile] = useState(null)
+  const [moveTargetTicker, setMoveTargetTicker] = useState('')
+  const [moveTargetPath, setMoveTargetPath] = useState('')
+  const [allTickerNames, setAllTickerNames] = useState(null)
+  // Drag-and-drop of a file card onto a subfolder card, both same-ticker
+  // (see handleFolderDrop below). `draggingFile` (the fileKey currently
+  // being dragged, if any) drives a dimmed look on the source card;
+  // `dragOverFolder` (the folder path currently being dragged over, if
+  // any) drives a highlighted look on the drop target. Both are cleared
+  // on drop, drag end, or drag leave.
+  const [draggingFile, setDraggingFile] = useState(null)
+  const [dragOverFolder, setDragOverFolder] = useState(null)
+  // Same idea, for dragging a file onto the "Back" button — moves the
+  // file up one level (see handleBackDrop) and navigates there too, same
+  // as dropping onto a folder card one level up would if it were visible.
+  // At the ticker's own root there's nothing above it to move into, so a
+  // drop there is just navigation, same as clicking Back.
+  const [backDragOver, setBackDragOver] = useState(false)
 
   useEffect(() => {
     setSelectionMode(false)
@@ -377,6 +401,159 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
     }
   }
 
+  // Opens the "move to..." form for a file — defaults to this ticker's
+  // own root, so within-ticker moves (the more common case) only need the
+  // subfolder field changed. Loads the full cross-status ticker list on
+  // first use, not on every screen visit.
+  async function openMoveDialog(key) {
+    setOpenFileMenu(null)
+    setMovingFile(key)
+    setMoveTargetTicker(ticker)
+    setMoveTargetPath('')
+    if (allTickerNames === null) {
+      try {
+        const [active, inactive, historicals] = await Promise.all([
+          api.getActiveTickers(),
+          api.getInactiveTickers(),
+          api.getHistoricalsTickers(),
+        ])
+        setAllTickerNames([...active, ...inactive, ...historicals].sort())
+      } catch {
+        setAllTickerNames([ticker])
+      }
+    }
+  }
+
+  function closeMoveDialog() {
+    setMovingFile(null)
+  }
+
+  // Shared by the "Move to..." dialog and drag-and-drop (dropping a file
+  // card onto a subfolder card) below — same move, two different ways to
+  // trigger it.
+  async function moveFileTo(file, targetTicker, targetPath) {
+    // A no-op move (same ticker, same subfolder) — nothing to actually do.
+    if (targetTicker === ticker && targetPath === (file.relative_path || '')) return
+    const previous = files
+    let next
+    if (targetTicker === ticker) {
+      // Staying under this same ticker — update the file's relative_path
+      // in place instead of dropping it. Dropping it would leave nothing
+      // to show at the destination if the user is immediately navigated
+      // there afterward (see handleBackDrop below) — it'd sit blank
+      // until a real refetch caught up, instead of showing the file
+      // right away. Filtered out of the CURRENT level by directChildren
+      // same as always; only actually visible once its new relative_path
+      // matches wherever's being viewed.
+      const updatedFiles = files.files.map((f) => (fileKey(f) === fileKey(file) ? { ...f, relative_path: targetPath } : f))
+      const newFolders = targetPath && !files.folders.includes(targetPath) ? [...files.folders, targetPath] : files.folders
+      next = { files: updatedFiles, folders: newFolders }
+    } else {
+      // Moving to a different ticker entirely — nothing at any level of
+      // this ticker should still show it.
+      next = { ...files, files: files.files.filter((f) => fileKey(f) !== fileKey(file)) }
+    }
+    filesCache[ticker] = next
+    setFiles(next)
+    try {
+      await api.moveTickerFile(ticker, file.name, file.relative_path, targetTicker, targetPath)
+      setMessage(`"${file.name}" moved to ${targetTicker}${targetPath ? `/${targetPath}` : ''}.`)
+    } catch (err) {
+      filesCache[ticker] = previous
+      setFiles(previous)
+      setMessage(`Failed to move "${file.name}": ${err.message}`)
+    }
+  }
+
+  async function handleMoveFile(file) {
+    const targetTicker = moveTargetTicker.trim() || ticker
+    const targetPath = moveTargetPath.trim()
+    setMovingFile(null)
+    await moveFileTo(file, targetTicker, targetPath)
+  }
+
+  // Drag-and-drop is scoped to same-ticker moves only — dropping a file
+  // card onto a subfolder card, both already visible together in this
+  // same screen. A different ticker's files live on a whole separate
+  // screen (the list view), so there's nothing to drag onto for a
+  // cross-ticker move without a much bigger UI rework; the "Move to..."
+  // dialog above stays the only way to do that.
+  function handleFileDragStart(e, file) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', fileKey(file))
+    setDraggingFile(fileKey(file))
+  }
+
+  function handleFileDragEnd() {
+    setDraggingFile(null)
+  }
+
+  function handleFolderDragOver(e, folderPath) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (dragOverFolder !== folderPath) setDragOverFolder(folderPath)
+  }
+
+  function handleFolderDragLeave(folderPath) {
+    setDragOverFolder((prev) => (prev === folderPath ? null : prev))
+  }
+
+  function handleFolderDrop(e, folderPath) {
+    e.preventDefault()
+    setDragOverFolder(null)
+    setDraggingFile(null)
+    const key = e.dataTransfer.getData('text/plain')
+    const file = files.files.find((f) => fileKey(f) === key)
+    if (file) moveFileTo(file, ticker, folderPath)
+  }
+
+  // Dropping a file on "Back" moves it up one level, same as dropping it
+  // on a folder card — the parent subfolder (or the ticker's own root, if
+  // dropped while already one level deep) is just another valid
+  // destination, even though it isn't rendered as its own folder card at
+  // this level. At the ticker's own root there's no level above it this
+  // app manages (that would be the whole status folder, not a per-file
+  // destination), so a drop there is pure navigation only — nothing to
+  // move it into.
+  function handleBackDrop(e) {
+    e.preventDefault()
+    setBackDragOver(false)
+    setDraggingFile(null)
+    const key = e.dataTransfer.getData('text/plain')
+    const file = files.files.find((f) => fileKey(f) === key)
+    if (file && subfolderPath) {
+      const parentPath = subfolderPath.split('/').slice(0, -1).join('/')
+      moveFileTo(file, ticker, parentPath)
+    }
+    onBack()
+  }
+
+  // Shared by the grid card and list row below — same form either way.
+  function renderMoveDialog(file) {
+    return (
+      <div className="card__confirm">
+        <p>Move to:</p>
+        <select value={moveTargetTicker} onChange={(e) => setMoveTargetTicker(e.target.value)}>
+          {(allTickerNames ?? [ticker]).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <input
+          type="text"
+          placeholder="Subfolder (leave blank for root)"
+          value={moveTargetPath}
+          onChange={(e) => setMoveTargetPath(e.target.value)}
+        />
+        <div className="card__rename-actions">
+          <button onClick={() => handleMoveFile(file)}>Move</button>
+          <button onClick={closeMoveDialog}>Cancel</button>
+        </div>
+      </div>
+    )
+  }
+
   async function handleRename() {
     const newName = renameValue.trim()
     if (!newName || newName === ticker) {
@@ -446,7 +623,13 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
   function renderFolderCard(name) {
     const key = subfolderPath ? `${subfolderPath}/${name}` : name
     return (
-      <div key={`folder:${key}`} className="card">
+      <div
+        key={`folder:${key}`}
+        className={`card${dragOverFolder === key ? ' card--drag-over' : ''}`}
+        onDragOver={(e) => handleFolderDragOver(e, key)}
+        onDragLeave={() => handleFolderDragLeave(key)}
+        onDrop={(e) => handleFolderDrop(e, key)}
+      >
         <div className="card__preview card__preview--icon" onClick={() => handleOpenFolder(name)}>
           📁
           {selectionMode && (
@@ -519,7 +702,13 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
       )
     }
     return (
-      <div key={`folder:${key}`} className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}`}>
+      <div
+        key={`folder:${key}`}
+        className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}${dragOverFolder === key ? ' data-table__row--drag-over' : ''}`}
+        onDragOver={(e) => handleFolderDragOver(e, key)}
+        onDragLeave={() => handleFolderDragLeave(key)}
+        onDrop={(e) => handleFolderDrop(e, key)}
+      >
         {selectionMode && (
           <span className="data-table__select">
             <input
@@ -572,7 +761,13 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
   function renderFileCard(file) {
     const key = fileKey(file)
     return (
-      <div key={key} className="card">
+      <div
+        key={key}
+        className={`card${draggingFile === key ? ' card--dragging' : ''}`}
+        draggable
+        onDragStart={(e) => handleFileDragStart(e, file)}
+        onDragEnd={handleFileDragEnd}
+      >
         <div className="card__preview" onClick={() => handleOpenFile(file)}>
           <FileThumbnail ticker={ticker} filename={file.name} relativePath={file.relative_path} size="large" />
           {selectionMode && (
@@ -594,6 +789,8 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
             </button>
             <button onClick={() => setConfirmDeleteFile(null)}>Cancel</button>
           </div>
+        ) : movingFile === key ? (
+          renderMoveDialog(file)
         ) : (
           <div className="card__footer">
             <div className="card__footer-text">
@@ -621,6 +818,7 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
               >
                 Open in Dropbox
               </button>
+              <button onClick={() => openMoveDialog(key)}>Move to...</button>
               <button
                 className="danger"
                 onClick={() => {
@@ -680,8 +878,21 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
         </div>
       )
     }
+    if (movingFile === key) {
+      return (
+        <div key={key} className="data-table__row data-table__row--confirm">
+          {renderMoveDialog(file)}
+        </div>
+      )
+    }
     return (
-      <div key={key} className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}`}>
+      <div
+        key={key}
+        className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}${draggingFile === key ? ' data-table__row--dragging' : ''}`}
+        draggable
+        onDragStart={(e) => handleFileDragStart(e, file)}
+        onDragEnd={handleFileDragEnd}
+      >
         {selectionMode && (
           <span className="data-table__select">
             <input
@@ -724,6 +935,7 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
             >
               Open in Dropbox
             </button>
+            <button onClick={() => openMoveDialog(key)}>Move to...</button>
             <button
               className="danger"
               onClick={() => {
@@ -755,7 +967,19 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
 
   return (
     <div className="ticker-detail">
-      <button onClick={onBack}>&larr; Back</button>
+      <button
+        className={backDragOver ? 'back-button--drag-over' : ''}
+        onClick={onBack}
+        onDragOver={(e) => {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'move'
+          if (!backDragOver) setBackDragOver(true)
+        }}
+        onDragLeave={() => setBackDragOver(false)}
+        onDrop={handleBackDrop}
+      >
+        &larr; Back
+      </button>
       <h2>
         {subfolderSegments.length === 0 ? (
           ticker

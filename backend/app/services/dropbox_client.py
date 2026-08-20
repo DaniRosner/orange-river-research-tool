@@ -307,6 +307,24 @@ def create_folder(path: str) -> None:
     client.files_create_folder_v2(path)
 
 
+def ensure_folder(path: str) -> None:
+    """Create a folder at `path` if it doesn't already exist — silently
+    no-ops on a conflict (folder's already there), unlike
+    create_folder() above, which is used where a fresh folder is
+    genuinely expected and a conflict would itself be a real bug worth
+    surfacing. Needed before moving a file into a brand-new subfolder:
+    unlike files_upload (which auto-creates missing parent folders),
+    files_move_v2 requires the destination's parent folder to already
+    exist."""
+    client = get_client()
+    try:
+        client.files_create_folder_v2(path)
+    except dropbox.exceptions.ApiError as error:
+        if error.error.is_path() and error.error.get_path().is_conflict():
+            return
+        raise
+
+
 def move(from_path: str, to_path: str) -> None:
     """Move/rename a file or folder within Dropbox. Auto-renames on a
     naming conflict at the destination rather than failing outright."""
