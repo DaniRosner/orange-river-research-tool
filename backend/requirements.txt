@@ -9,3 +9,5 @@ itsdangerous
 pypdfium2
 Pillow
 pytest
+mcp
+reportlab

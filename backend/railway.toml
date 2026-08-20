@@ -1,9 +1,16 @@
 # Railway config for the backend service. Set this service's Root
 # Directory to `backend` in the Railway dashboard so this file is picked
 # up — see README.md "Redeploying" for the full setup steps.
+#
+# builder was NIXPACKS until 2026-08-13; Railway has since deprecated
+# Nixpacks and silently substitutes Railpack when it's selected, but
+# without properly carrying over buildCommand/startCommand into Railpack's
+# own "prepare" phase — that mismatch caused real deploy failures
+# ("Railpack could not determine how to build the app"). Switched to
+# RAILPACK explicitly so the custom commands below are actually respected.
 
 [build]
-builder = "NIXPACKS"
+builder = "RAILPACK"
 buildCommand = "pip install -r requirements.txt"
 
 [deploy]

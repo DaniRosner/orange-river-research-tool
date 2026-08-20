@@ -49,6 +49,44 @@ class Settings(BaseSettings):
     # with no match just keeps the plain folder icon.
     logo_dev_api_key: str = ""
 
+    # ChatGPT/Claude "bridge" connector secrets (see app/routers/bridge.py).
+    # Each AI's custom connector is registered pointing at its own
+    # /bridge/<secret>/mcp URL — the server infers which AI is calling
+    # purely from which secret path was hit, since ChatGPT's custom-
+    # connector UI has no plain bearer-token option (Claude's does, but a
+    # URL-embedded secret works identically for both, so that's the one
+    # mechanism used for both). Generate each with
+    # `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` —
+    # long, random, never committed, never logged. Leaving either blank
+    # simply skips mounting that AI's bridge route.
+    bridge_chatgpt_secret: str = ""
+    bridge_claude_secret: str = ""
+
+    # A second, fully isolated identity pair used only for continued
+    # dev/testing (see app/routers/bridge.py) — same tools, own send/
+    # receive queue, own Dropbox destination (dropbox_bridge_test_path
+    # below), so testing never mixes with or lands in the user's real bridge
+    # data. Leaving either blank simply skips mounting that test route.
+    bridge_chatgpt_test_secret: str = ""
+    bridge_claude_test_secret: str = ""
+
+    # Where anything saved via the "_test" bridge identities lands —
+    # always this one folder regardless of active/inactive/historicals,
+    # since it's just for verifying rendering/behavior, not real ticker
+    # organization.
+    dropbox_bridge_test_path: str = "/Shared/Bridge Test"
+
+    # Email ping to the user whenever a new bridge message shows up, so he
+    # doesn't have to remember to go check (see app/services/notifications.py
+    # and the poll loop in app/main.py). Sent via plain SMTP with a Gmail
+    # app password — not a real subscription-based inbox, just enough to
+    # send one-line notifications. Leaving bridge_notify_email blank
+    # disables the whole notification loop.
+    bridge_notify_email: str = ""
+    bridge_notify_smtp_user: str = ""
+    bridge_notify_smtp_app_password: str = ""
+    bridge_notify_interval_seconds: int = 300
+
     class Config:
         env_file = "../.env"
         extra = "ignore"

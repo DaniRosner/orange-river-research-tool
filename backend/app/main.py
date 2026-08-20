@@ -3,15 +3,67 @@
 # Actual endpoint logic lives in app/routers/ (one file per resource:
 # auth, tickers, files) — this file just wires the app together.
 
+import asyncio
+import logging
+from contextlib import AsyncExitStack, asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
-from app.routers import auth, files, tickers
+from app.routers import auth, bridge, files, tickers
+from app.services import bridge_store, notifications
 from app.services.auth import current_user
 
-app = FastAPI(title="Research Tool")
+logger = logging.getLogger(__name__)
+
+
+async def _bridge_notification_loop():
+    """Polls for bridge_messages nobody's been emailed about yet and pings
+    the user — see app/services/notifications.py. Only started when
+    notification settings are actually configured (see lifespan below)."""
+    while True:
+        await asyncio.sleep(settings.bridge_notify_interval_seconds)
+        pending = bridge_store.fetch_unnotified()
+        if not pending:
+            continue
+        if notifications.send_bridge_notification(pending):
+            bridge_store.mark_notified([m["id"] for m in pending])
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Mounting bridge.chatgpt_app/claude_app via app.mount() below does NOT
+    # auto-start their MCP session managers' task groups — each sub-app's
+    # own lifespan has to be entered manually here, or every real bridge
+    # request 500s with "Task group is not initialized." Skipped entirely
+    # if a secret isn't configured (e.g. local dev), so bridge routes
+    # simply aren't mounted rather than crashing startup.
+    async with AsyncExitStack() as stack:
+        if settings.bridge_chatgpt_secret:
+            await stack.enter_async_context(bridge.chatgpt_app.router.lifespan_context(bridge.chatgpt_app))
+        if settings.bridge_claude_secret:
+            await stack.enter_async_context(bridge.claude_app.router.lifespan_context(bridge.claude_app))
+        if settings.bridge_chatgpt_test_secret:
+            await stack.enter_async_context(
+                bridge.chatgpt_test_app.router.lifespan_context(bridge.chatgpt_test_app)
+            )
+        if settings.bridge_claude_test_secret:
+            await stack.enter_async_context(bridge.claude_test_app.router.lifespan_context(bridge.claude_test_app))
+
+        notify_task = None
+        if notifications.notifications_enabled():
+            notify_task = asyncio.create_task(_bridge_notification_loop())
+
+        try:
+            yield
+        finally:
+            if notify_task:
+                notify_task.cancel()
+
+
+app = FastAPI(title="Research Tool", lifespan=lifespan)
 
 # Signs the session cookie that /auth/* uses to remember who's signed in
 # (see app/services/auth.py). same_site="none" + https_only=True because
@@ -44,6 +96,31 @@ app.include_router(auth.router)
 # endpoint, so a new route added later can't accidentally ship unprotected.
 app.include_router(tickers.router, dependencies=[Depends(current_user)])
 app.include_router(files.router, dependencies=[Depends(current_user)])
+
+# Deliberately NOT behind Depends(current_user) — these are called by
+# ChatGPT/Claude's own infra, not a signed-in browser session; the
+# URL-embedded secret (see app/config.py) is the auth boundary instead.
+# The plain upload-file routers are registered BEFORE the MCP app mounts
+# below, and must stay that way — Starlette matches routes in
+# registration order, and a Mount() otherwise swallows every request
+# under its prefix (including /upload-file) before it ever reaches these.
+if settings.bridge_chatgpt_secret:
+    app.include_router(bridge.chatgpt_upload_router, prefix=f"/bridge/{settings.bridge_chatgpt_secret}")
+if settings.bridge_claude_secret:
+    app.include_router(bridge.claude_upload_router, prefix=f"/bridge/{settings.bridge_claude_secret}")
+if settings.bridge_chatgpt_test_secret:
+    app.include_router(bridge.chatgpt_test_upload_router, prefix=f"/bridge/{settings.bridge_chatgpt_test_secret}")
+if settings.bridge_claude_test_secret:
+    app.include_router(bridge.claude_test_upload_router, prefix=f"/bridge/{settings.bridge_claude_test_secret}")
+
+if settings.bridge_chatgpt_secret:
+    app.mount(f"/bridge/{settings.bridge_chatgpt_secret}", bridge.chatgpt_app)
+if settings.bridge_claude_secret:
+    app.mount(f"/bridge/{settings.bridge_claude_secret}", bridge.claude_app)
+if settings.bridge_chatgpt_test_secret:
+    app.mount(f"/bridge/{settings.bridge_chatgpt_test_secret}", bridge.chatgpt_test_app)
+if settings.bridge_claude_test_secret:
+    app.mount(f"/bridge/{settings.bridge_claude_test_secret}", bridge.claude_test_app)
 
 
 @app.get("/health")

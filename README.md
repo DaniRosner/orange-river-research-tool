@@ -212,3 +212,145 @@ filenames.
 folder, and the existing `OEC` duplicate between `Active/` and `Inactive/`.
 The sorting logic does not attempt to resolve any of these — it only
 governs where *newly uploaded* files go.
+
+## Research bridge (ChatGPT ↔ Claude)
+
+Phase 2 addition: lets the user hand a research report back and forth between
+ChatGPT and Claude mid-conversation ("send this to Claude", "check what
+Claude said", "save the final version"), instead of a fully-automated
+pipeline. Lives in `backend/app/routers/bridge.py` and
+`backend/app/services/bridge_store.py`.
+
+**How it works:** two separate MCP servers, one per AI, each mounted at
+its own secret URL (`/bridge/<BRIDGE_CHATGPT_SECRET>/mcp` and
+`/bridge/<BRIDGE_CLAUDE_SECRET>/mcp` — see `.env.example`). The server
+infers which AI is calling purely from which secret path was hit, so tool
+calls never need an explicit "from/to" argument. Each AI gets three tools:
+`send_report` (always to the other AI), `get_pending` (check what the
+other AI sent), and `save_final` (write an approved version into that
+ticker's real Dropbox folder, reusing the same `dropbox_client`/
+`ticker_registry`/`activity_log` code the file-upload flow already uses).
+
+Both `send_report` and `save_final` take an `encoding` argument — `"text"`
+(default) for a plain markdown report, or `"base64"` for a real binary
+file (e.g. an actual `.xlsx` financial model with working formulas, which
+both ChatGPT and Claude can genuinely generate in their own apps) plus a
+`filename` naming it. So a draft model can be handed to the other AI for
+review via `send_report` before anything's finalized, not just saved
+directly — `save_final` verified byte-for-byte round-trip for the binary
+path; `get_pending` surfaces each message's `encoding`/`filename` so the
+receiving AI knows whether `content` is text to read or a file's raw
+bytes.
+
+**`save_final`'s text path renders a real PDF, server-side** —
+`app/services/pdf_render.py` (markdown2 + xhtml2pdf, both pure Python, no
+native system dependencies) converts the markdown to a formatted PDF
+before it's written to Dropbox, and the filename's extension is forced to
+`.pdf` regardless of what was passed in. This is deterministic backend
+code, not the AI generating anything, so it carries none of the
+reliability issues base64 content does. the user gets a real, readable PDF
+memo, not raw markdown text. Verified: headings, bold/italic, bullet and
+numbered lists, tables, and blockquotes all render correctly; round-tripped
+a real save through the Dev Sandbox and confirmed the downloaded PDF's
+extracted text matches. `send_report` (AI-to-AI review, not what the user
+sees) is untouched — still plain markdown, no rendering.
+
+`send_report` de-dupes: an identical (sender/recipient/ticker/content/
+encoding) call within 2 minutes returns the existing pending message's id
+instead of creating a duplicate — real-world trigger was ChatGPT's client
+timing out on a slow permission-confirmation click and silently retrying
+the tool call, which without this created several identical pending
+messages for the other AI to see.
+
+Both tools' MCP `instructions` explicitly tell the model never to call
+`send_report`/`save_final` in the same turn it drafts/revises something —
+show it and wait for the user to explicitly say to send/save it first. This
+is a prompt-level guardrail, not code-enforced (the server has no way to
+verify "real" approval happened), so it's a strong nudge, not a guarantee.
+
+`save_final` can also create a genuinely new ticker (not just save into an
+existing one) — pass `new_ticker_status` ("active"/"inactive"/
+"historicals") to say which bucket it belongs in; omitting it for a new
+ticker returns an error telling the AI to ask the user first rather than
+guessing, and a likely typo of an existing ticker always refuses outright
+(same "confirm, don't guess" principle `ticker_registry.resolve_ticker`
+already enforces elsewhere in the app).
+
+Messages live in a `bridge_messages` table in the
+same SQLite DB the activity log uses — same Railway Volume, no new infra.
+
+**Large files:** a real file's base64 form can run tens of thousands of
+characters, and an AI's own tools that read a file back into its context
+truncate past roughly that point (confirmed on a real ~34KB PDF, ~45K
+base64 chars) — silently corrupting anything sent through
+`send_report`/`save_final` in one call. A chunked-upload mechanism was
+built and tested to work around this, but live testing showed a deeper
+problem chunking doesn't fix: passing a chunk's content as a tool
+argument means the model has to *generate* that base64 text itself
+(tool arguments are model output, not a silent code-to-code handoff),
+which is slow and not fully reliable for long random-looking strings —
+so it was removed rather than kept as a half-working feature. Current
+guidance (in the MCP `instructions`): `encoding='base64'` is fine for
+files confidently small (roughly under 20K base64 characters); for
+anything larger, tell the user to download the file directly from the AI's
+own chat interface and use the tool's existing Upload button instead —
+that path never requires the AI to touch the file's bytes as generated
+text at all.
+
+**Real files via a local shared folder + local upload tool:** the
+cloud-hosted bridge above always requires base64-encoding a file into a
+tool call, which is unreliable for large real files. As a separate,
+better path for those: both ChatGPT Desktop and Claude Desktop support
+local folder access (write real files directly to disk — confirmed
+working, including for genuine binary files) and local (stdio) MCP
+servers. `local-tools/research-tool_upload_mcp.py` is a small MCP server
+the user runs on his own machine, registered in both apps, exposing one tool
+— `upload_file(local_path, ticker, ...)` — that takes just a local file
+path (never file content) and does a real multipart upload to a plain
+REST endpoint on this same backend (`POST /bridge/<secret>/upload-file`,
+see `_build_upload_router` in `bridge.py`), reusing `save_final`'s exact
+ticker-resolution/typo-guard/audit-log logic. Workflow: the AI writes a
+finished file to the shared folder (reliable, since it's a real local
+file write, not a base64 tool argument), then calls `upload_file` with
+that path and a ticker — no encoding, no size limit, no retyping.
+Verified end-to-end (local MCP client → this backend → real Dropbox Dev
+Sandbox write → downloaded and byte-for-byte matched via SHA-256), plus
+its error paths (missing file, unrecognized ticker). See
+`local-tools/README.md` for setup steps.
+
+**Setup for the user:** generate both secrets
+(`python3 -c "import secrets; print(secrets.token_urlsafe(32))"`), set
+`BRIDGE_CHATGPT_SECRET`/`BRIDGE_CLAUDE_SECRET` on the backend service, then
+add a custom connector in his ChatGPT (Settings → Plugins → Developer
+mode) and Claude accounts, each pointed at the matching
+`https://<backend-domain>/bridge/<secret>/mcp` URL. No paid plan upgrade
+required on either side — confirmed via a full validation pass that custom
+MCP connectors, including write-capable ones, work fine even on ChatGPT
+Free.
+
+**Optional email notifications:** set `BRIDGE_NOTIFY_EMAIL` (the user's
+address) plus a Gmail app password
+(`BRIDGE_NOTIFY_SMTP_USER`/`BRIDGE_NOTIFY_SMTP_APP_PASSWORD`) to have the
+backend email him a one-line heads-up whenever a new message shows up, so
+he doesn't have to remember to check. This is a nudge, not real
+automation — neither ChatGPT nor Claude's consumer apps expose any way for
+a third party to inject a message into a live chat session, so the user will
+always need to send at least a short message himself to actually get a
+response; the connector's own instructions also tell the model to check
+`get_pending` proactively whenever a ticker comes up in conversation, so
+mentioning the ticker by name is usually enough.
+
+**Gotchas that cost real debugging time, designed around from the
+start — worth knowing if this ever needs touching again:**
+- The `mcp` Python SDK serves its endpoint at `/mcp` by default, not `/`.
+- Mounting an MCP sub-app inside FastAPI via `app.mount()` does **not**
+  auto-start its session manager's lifespan — has to be entered manually
+  from the parent app's own `lifespan=` (see `app/main.py`), or every real
+  request 500s with "Task group is not initialized."
+- The SDK's built-in DNS-rebinding protection rejects any Host header
+  other than `127.0.0.1`/`localhost` by default — must pass
+  `TransportSecuritySettings(enable_dns_rebinding_protection=False)` into
+  `streamable_http_app()` for a server sitting behind a real domain.
+- ChatGPT's custom-connector UI has no plain bearer-token field (only
+  OAuth/No Auth/Mixed) — a header-based secret is invisible from
+  ChatGPT's side, which is why the secret lives in the URL path instead.
