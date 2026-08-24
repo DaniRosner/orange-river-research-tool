@@ -43,6 +43,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 
 from fastapi import APIRouter, Request, UploadFile
 
@@ -54,6 +55,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _EMAIL_INTAKE_USER = {"full_name": "Email Intake", "email": "email-intake@yourfirm.local"}
+
+# Matches Mailgun's "attachment-N" field naming exactly (not
+# "attachment-count" or anything else) — used to discover attachments
+# directly from the form rather than trusting attachment-count (see
+# the comment where this is used, in inbound_email()).
+_ATTACHMENT_KEY_RE = re.compile(r"^attachment-\d+$")
 
 
 def _verify_signature(timestamp: str, token: str, signature: str) -> bool:
@@ -208,18 +215,6 @@ async def inbound_email(request: Request) -> dict:
         logger.warning("Email intake: rejected a webhook POST with an invalid/missing Mailgun signature.")
         return {"status": "rejected", "reason": "invalid signature"}
 
-    # TEMPORARY diagnostic — a real test batch with 3 confirmed .eml
-    # attachments (visible in Gmail's own UI) produced zero saved
-    # attachments; logging the exact field names/types Mailgun actually
-    # sent (not values — some may be large/sensitive) to find out
-    # whether attachment-count/attachment-N even exist in this payload,
-    # or whether Mailgun's "Forward" route action sends a different
-    # shape than assumed. Remove once the real cause is found.
-    logger.warning(
-        "Email intake DEBUG: form fields received: %s",
-        [(k, type(v).__name__, getattr(v, "filename", None)) for k, v in form.multi_items()],
-    )
-
     recipient = form.get("recipient", "")
     ticker_tag = _ticker_tag_from_recipient(recipient)
     if not ticker_tag:
@@ -250,12 +245,24 @@ async def inbound_email(request: Request) -> dict:
     )
     preview_url = dropbox_client.get_shareable_link(f"{folder}/{actual_filename}")
 
-    attachment_count = int(form.get("attachment-count", "0") or "0")
+    # Discovered directly from the form rather than trusting
+    # attachment-count: a real 3-attachment test confirmed attachment-1/
+    # 2/3 present and correctly typed in the payload, but
+    # attachment-count came back empty/zero for Mailgun's "Forward"
+    # route action specifically (unlike its documented behavior for a
+    # plain webhook), which silently skipped every attachment via
+    # range(1, 0+1). Scanning the actual keys sidesteps that field
+    # entirely, regardless of whether it's ever populated correctly.
+    attachment_items = sorted(
+        (
+            (key, value)
+            for key, value in form.multi_items()
+            if _ATTACHMENT_KEY_RE.match(key) and isinstance(value, UploadFile)
+        ),
+        key=lambda item: int(item[0].split("-", 1)[1]),
+    )
     saved_attachments = []
-    for i in range(1, attachment_count + 1):
-        attachment = form.get(f"attachment-{i}")
-        if not isinstance(attachment, UploadFile):
-            continue
+    for _key, attachment in attachment_items:
         data = await attachment.read()
         if _is_nested_email(attachment):
             # A whole other email attached — one of a batch from
