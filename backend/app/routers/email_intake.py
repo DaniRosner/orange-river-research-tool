@@ -208,6 +208,18 @@ async def inbound_email(request: Request) -> dict:
         logger.warning("Email intake: rejected a webhook POST with an invalid/missing Mailgun signature.")
         return {"status": "rejected", "reason": "invalid signature"}
 
+    # TEMPORARY diagnostic — a real test batch with 3 confirmed .eml
+    # attachments (visible in Gmail's own UI) produced zero saved
+    # attachments; logging the exact field names/types Mailgun actually
+    # sent (not values — some may be large/sensitive) to find out
+    # whether attachment-count/attachment-N even exist in this payload,
+    # or whether Mailgun's "Forward" route action sends a different
+    # shape than assumed. Remove once the real cause is found.
+    logger.warning(
+        "Email intake DEBUG: form fields received: %s",
+        [(k, type(v).__name__, getattr(v, "filename", None)) for k, v in form.multi_items()],
+    )
+
     recipient = form.get("recipient", "")
     ticker_tag = _ticker_tag_from_recipient(recipient)
     if not ticker_tag:
