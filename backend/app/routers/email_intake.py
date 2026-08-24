@@ -45,7 +45,18 @@ import json
 import logging
 import re
 
-from fastapi import APIRouter, Request, UploadFile
+from fastapi import APIRouter, Request
+
+# NOT fastapi.UploadFile — a distinct subclass, not the same type. This
+# router reads multipart fields via request.form() directly (no FastAPI
+# File()/UploadFile() dependency injection involved at all), and that
+# always hands back plain starlette.datastructures.UploadFile instances.
+# Checking isinstance(x, fastapi.UploadFile) against one of those is
+# always False — confirmed directly (fastapi.UploadFile is a subclass,
+# not an alias) after a real attachment silently vanished with no error
+# despite the payload genuinely containing it, correctly typed, right up
+# until this exact check.
+from starlette.datastructures import UploadFile
 
 from app.config import settings
 from app.services import activity_log, dropbox_client, eml_parse, email_render, notifications, sorting, ticker_registry
