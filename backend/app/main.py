@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
-from app.routers import auth, bridge, files, tickers
+from app.routers import auth, bridge, email_intake, files, tickers
 from app.services import bridge_store, notifications
 from app.services.auth import current_user
 
@@ -121,6 +121,15 @@ if settings.bridge_chatgpt_test_secret:
     app.mount(f"/bridge/{settings.bridge_chatgpt_test_secret}", bridge.chatgpt_test_app)
 if settings.bridge_claude_test_secret:
     app.mount(f"/bridge/{settings.bridge_claude_test_secret}", bridge.claude_test_app)
+
+# Mailgun's inbound-route webhook (see app/routers/email_intake.py) — not
+# behind Depends(current_user) (Mailgun's own servers call this, not a
+# signed-in browser session) and not a secret-URL path either (unlike the
+# bridge routes above, this one verifies each request's Mailgun signature
+# inside the handler itself). Skipped entirely if no signing key is
+# configured, same "optional integration" pattern as everything else here.
+if settings.mailgun_webhook_signing_key:
+    app.include_router(email_intake.router, prefix="/email-intake")
 
 
 @app.get("/health")

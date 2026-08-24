@@ -87,6 +87,24 @@ class Settings(BaseSettings):
     bridge_notify_smtp_app_password: str = ""
     bridge_notify_interval_seconds: int = 300
 
+    # Inbound email intake (see app/routers/email_intake.py) — lets the user
+    # forward an email straight into a ticker's Dropbox folder from
+    # anywhere (phone, webmail), no app open. Mailgun receives the
+    # forwarded email at intake+TICKER@<mailgun-inbound-domain> and POSTs
+    # it to this app's webhook; mailgun_webhook_signing_key is Mailgun's
+    # own per-account signing key (Settings -> Security in the Mailgun
+    # dashboard), used to verify a webhook POST actually came from Mailgun
+    # before ever touching Dropbox — this is a write path with no human
+    # confirmation step, so an unverified request must never be trusted.
+    # Leaving it blank skips mounting the intake route entirely, same
+    # pattern as every other optional integration above.
+    mailgun_webhook_signing_key: str = ""
+    # The Mailgun inbound domain forwarded emails actually go to (e.g. a
+    # sandbox subdomain like "sandbox123.mailgun.org") — not used for
+    # verification, just so this app can report its own intake address
+    # back (e.g. in an error/notification email) without hardcoding it.
+    mailgun_inbound_domain: str = ""
+
     class Config:
         env_file = "../.env"
         extra = "ignore"

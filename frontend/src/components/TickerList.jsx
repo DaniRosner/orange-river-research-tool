@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { useAutoDismiss } from '../useAutoDismiss.js'
 import { describeActivity } from '../activityLabels.js'
@@ -38,6 +38,18 @@ const FETCHERS = {
 // visit to a tab renders as a blank list with zero feedback rather than
 // "still loading."
 const itemsCache = { Active: null, Inactive: null, Historicals: null, 'Needs Review': null }
+
+// Same junk files UploadButton.jsx's drop zone already filters out (see
+// its own copy's comment for why) — duplicated here rather than shared,
+// since it's a two-line check and pulling it into a shared module isn't
+// worth the indirection for something this small.
+const JUNK_NAMES = new Set(['.ds_store'])
+const JUNK_SUFFIXES = ['.lnk']
+
+function isJunkFile(name) {
+  const lower = name.toLowerCase()
+  return JUNK_NAMES.has(lower) || JUNK_SUFFIXES.some((suffix) => lower.endsWith(suffix))
+}
 
 // Same idea as itemsCache above, for the two things fetched once alongside
 // every tab's list — activity captions and ticker logos. Without a
@@ -155,6 +167,107 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
   // a brand-new ticker just shows the plain folder icon until the next
   // refresh happens to look it up (never blocks on this specifically).
   const [tickerLogos, setTickerLogos] = useState(() => tickerLogosCache)
+
+  // Dropping a real OS file (an email dragged straight out of a desktop
+  // mail client, or any other file) directly onto a ticker's folder card
+  // — a separate, much smaller path than UploadButton's drop zone, since
+  // the target ticker is already known here (whichever card the file
+  // landed on), so there's never a ticker/new-ticker-status question to
+  // ask, only the two things that can still come up for an already-known
+  // ticker: a filename collision, or a choice of subfolder within it.
+  //
+  // Which card (if any) is currently being dragged over — purely visual
+  // (see .card--drag-over), cleared on drop/leave.
+  const [cardDropOverTicker, setCardDropOverTicker] = useState(null)
+  // Files still waiting for whichever ticker's drop queue is currently
+  // running, keyed by ticker — a ref (not state) for the same reason
+  // UploadButton.jsx's batchQueueRef is: the async chain below closes over
+  // whichever render was active when the drop started, so a state read
+  // deep in that chain would see a stale value even after "updating" it.
+  const cardDropQueueRef = useRef({})
+  // The confirm dialog (if any) currently pausing a card's drop queue —
+  // { ticker, kind: 'duplicate' | 'choose_subfolder', file, rest, ...result }.
+  const [cardDropConfirm, setCardDropConfirm] = useState(null)
+  const [cardDropNewFolderName, setCardDropNewFolderName] = useState('')
+
+  function startCardDropQueue(ticker, files) {
+    const real = files.filter((file) => !isJunkFile(file.name))
+    if (real.length === 0) return
+    const [first, ...rest] = real
+    cardDropQueueRef.current[ticker] = rest
+    submitCardDropUpload(ticker, first, {})
+  }
+
+  function processNextCardDrop(ticker) {
+    const remaining = cardDropQueueRef.current[ticker] || []
+    if (remaining.length === 0) {
+      delete cardDropQueueRef.current[ticker]
+      refreshAll()
+      return
+    }
+    const [next, ...rest] = remaining
+    cardDropQueueRef.current[ticker] = rest
+    submitCardDropUpload(ticker, next, {})
+  }
+
+  async function submitCardDropUpload(ticker, file, options) {
+    try {
+      const result = await api.uploadFile(file, { ...options, overrideTicker: ticker })
+
+      if (result.status === 'duplicate_needs_confirmation' || result.status === 'choose_subfolder') {
+        setCardDropConfirm({ ticker, file, kind: result.status === 'duplicate_needs_confirmation' ? 'duplicate' : 'choose_subfolder', ...result })
+        return
+      }
+
+      if (result.suffix_warning) {
+        // Same "hard to miss" treatment UploadButton gives this — reuse
+        // its own overlay state isn't reachable from here, so surface it
+        // through the plain list message instead; rare enough not to
+        // warrant its own dedicated UI here too.
+        setListMessage(`"${file.name}" filed under ${result.ticker}. Heads up: ${result.suffix_warning}`)
+      } else if (result.note) {
+        setListMessage(`"${file.name}" is already saved under ${ticker}.`)
+      } else {
+        const renamed = result.filename && result.filename !== file.name
+        setListMessage(renamed ? `"${file.name}" saved as "${result.filename}" under ${ticker} (name conflict).` : `"${file.name}" saved under ${ticker}.`)
+      }
+      processNextCardDrop(ticker)
+    } catch (err) {
+      setListMessage(`Failed to upload "${file.name}" to ${ticker}: ${err.message}`)
+      processNextCardDrop(ticker)
+    }
+  }
+
+  function resumeCardDropConfirm(options) {
+    const { ticker, file } = cardDropConfirm
+    setCardDropConfirm(null)
+    submitCardDropUpload(ticker, file, options)
+  }
+
+  function handleCardDragEnter(ticker, event) {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    setCardDropOverTicker(ticker)
+  }
+
+  function handleCardDragOver(event) {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+  }
+
+  function handleCardDragLeave(ticker, event) {
+    event.preventDefault()
+    setCardDropOverTicker((current) => (current === ticker ? null : current))
+  }
+
+  function handleCardDrop(ticker, event) {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    setCardDropOverTicker(null)
+    const files = Array.from(event.dataTransfer.files)
+    if (files.length === 0) return
+    startCardDropQueue(ticker, files)
+  }
 
   // Re-fetches one tab's list into the cache — both the module-level copy
   // (so it survives an unmount) and component state (so it re-renders).
@@ -510,7 +623,14 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
     const logoUrl = tickerLogos[ticker]
     const monogram = tickerMonogram(ticker)
     return (
-      <div className="card" key={ticker}>
+      <div
+        className={`card${cardDropOverTicker === ticker ? ' card--drag-over' : ''}`}
+        key={ticker}
+        onDragEnter={(e) => handleCardDragEnter(ticker, e)}
+        onDragOver={handleCardDragOver}
+        onDragLeave={(e) => handleCardDragLeave(ticker, e)}
+        onDrop={(e) => handleCardDrop(ticker, e)}
+      >
         <div
           className={`card__preview ${logoUrl ? 'card__preview--logo' : 'card__preview--monogram'}`}
           onClick={() => onSelectTicker({ ticker, status: activeTab.toLowerCase() })}
@@ -611,7 +731,14 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
       )
     }
     return (
-      <div className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}`} key={ticker}>
+      <div
+        className={`data-table__row${selectionMode ? ' data-table__row--selecting' : ''}${cardDropOverTicker === ticker ? ' card--drag-over' : ''}`}
+        key={ticker}
+        onDragEnter={(e) => handleCardDragEnter(ticker, e)}
+        onDragOver={handleCardDragOver}
+        onDragLeave={(e) => handleCardDragLeave(ticker, e)}
+        onDrop={(e) => handleCardDrop(ticker, e)}
+      >
         {selectionMode && (
           <span className="data-table__select">
             <input
@@ -741,6 +868,70 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
       )}
 
       {listMessage && <p>{listMessage}</p>}
+
+      {/* Pauses a card-drop upload on the same two questions
+          UploadButton's drop zone can hit (a filename collision, or which
+          subfolder to use) — the ticker itself is never in question here,
+          since it's whichever card the file was dropped onto. */}
+      {cardDropConfirm && (
+        <div className="modal-overlay">
+          <div className="modal">
+            {cardDropConfirm.kind === 'duplicate' ? (
+              <>
+                <p>
+                  A different file named "{cardDropConfirm.filename}" already exists under {cardDropConfirm.ticker}.
+                </p>
+                <button onClick={() => resumeCardDropConfirm({ onDuplicate: 'replace' })}>Replace it</button>
+                <button onClick={() => resumeCardDropConfirm({ onDuplicate: 'keep_both' })}>Keep both</button>
+                <button onClick={() => { setCardDropConfirm(null); processNextCardDrop(cardDropConfirm.ticker) }}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <p>
+                  "{cardDropConfirm.file.name}" — where should this go in {cardDropConfirm.folder_label}?
+                </p>
+                <button onClick={() => resumeCardDropConfirm({ relativePath: '.' })}>
+                  Directly in {cardDropConfirm.folder_label}
+                </button>
+                <ul>
+                  {(cardDropConfirm.subfolders || []).map((name) => (
+                    <li key={name}>
+                      <button onClick={() => resumeCardDropConfirm({ relativePath: name })}>{name}</button>
+                    </li>
+                  ))}
+                </ul>
+                <input
+                  type="text"
+                  placeholder="New folder name"
+                  value={cardDropNewFolderName}
+                  onChange={(e) => setCardDropNewFolderName(e.target.value)}
+                />
+                <button
+                  disabled={!cardDropNewFolderName.trim() || cardDropNewFolderName.trim() === '.'}
+                  onClick={() => {
+                    const relativePath = cardDropNewFolderName.trim()
+                    setCardDropNewFolderName('')
+                    resumeCardDropConfirm({ relativePath })
+                  }}
+                >
+                  Create new folder
+                </button>
+                <button
+                  onClick={() => {
+                    setCardDropNewFolderName('')
+                    setCardDropConfirm(null)
+                    processNextCardDrop(cardDropConfirm.ticker)
+                  }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {items === null ? (
         <p>Loading{activeTab === 'Needs Review' ? ' files' : ' tickers'}…</p>
