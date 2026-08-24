@@ -160,7 +160,12 @@ def _resolve_and_file_email(
     Returns (actual_filename, real_ticker_or_None, folder_it_landed_in).
     """
     pdf_bytes = email_render.render_email_to_pdf(subject, sender, date_str, body_text)
-    base_filename = (subject or "Forwarded email").strip()[:80]
+    # "Email - " prefix so this is recognizable at a glance as a
+    # forwarded email (this renderer's plain subject/from/date/body
+    # layout) rather than an AI-drafted memo or a manually uploaded
+    # document — otherwise it's indistinguishable from any other PDF
+    # sitting in the same folder.
+    base_filename = f"Email - {(subject or 'Forwarded email').strip()[:80]}"
 
     if explicit_resolution and explicit_resolution["kind"] == "matched":
         real_ticker = explicit_resolution["ticker"]

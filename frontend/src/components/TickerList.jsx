@@ -937,6 +937,30 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
         <p>Loading{activeTab === 'Needs Review' ? ' files' : ' tickers'}…</p>
       ) : activeTab === 'Needs Review' ? (
         <>
+          {filteredItems.length > 0 && (
+            <label className="file-row file-row__select-all-header">
+              <input
+                type="checkbox"
+                checked={selectionMode && selected.size === filteredItems.length}
+                onChange={() => {
+                  // One click, not the two-step "Select items" then
+                  // "Select all" the toolbar button above still supports
+                  // (kept for single-item selection) — checking this
+                  // both turns selection mode on AND selects everything
+                  // currently visible in one action, matching what
+                  // "select all" usually means at a glance.
+                  if (selectionMode && selected.size === filteredItems.length) {
+                    setSelected(new Set())
+                  } else {
+                    setSelectionMode(true)
+                    setSelected(new Set(filteredItems))
+                  }
+                }}
+                aria-label="Select all files"
+              />
+              <span className="file-row__name">Select all</span>
+            </label>
+          )}
           <ul>
             {filteredItems.map((filename) => (
               <li key={filename} className="file-row">
