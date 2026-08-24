@@ -18,6 +18,7 @@ the user gets a plain notification email instead.
 
 import hashlib
 import hmac
+import json
 import logging
 
 from fastapi import APIRouter, Request, UploadFile
@@ -53,6 +54,25 @@ def _verify_signature(timestamp: str, token: str, signature: str) -> bool:
         digestmod=hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+def _header_value(message_headers_json: str, header_name: str) -> str:
+    """Mailgun doesn't hand over a plain "date"/"from" field for most
+    original-message headers — instead `message-headers` is a JSON-
+    encoded list of [name, value] pairs straight off the original email
+    (see Mailgun's inbound-route docs). Pulls one out by name,
+    case-insensitively (email header casing isn't guaranteed
+    consistent); returns "" if it's missing or the field isn't valid
+    JSON — never raises, since a malformed/missing header here shouldn't
+    block filing the email itself."""
+    try:
+        headers = json.loads(message_headers_json or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    for name, value in headers:
+        if name.lower() == header_name.lower():
+            return value
+    return ""
 
 
 def _ticker_tag_from_recipient(recipient: str) -> str | None:
@@ -111,7 +131,7 @@ async def inbound_email(request: Request) -> dict:
 
     subject = form.get("subject", "")
     sender = form.get("from", "") or form.get("sender", "")
-    date_str = form.get("date", "")
+    date_str = _header_value(form.get("message-headers", ""), "Date")
     body_text = form.get("stripped-text") or form.get("body-plain") or ""
 
     known = ticker_registry.get_known_tickers()
