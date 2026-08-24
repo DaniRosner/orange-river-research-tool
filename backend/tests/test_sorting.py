@@ -3,6 +3,7 @@ from app.services.sorting import (
     find_close_matches,
     find_known_ticker,
     find_ticker_mentioned_anywhere,
+    find_ticker_mentioned_in_text,
     parse_leading_token,
     parse_ticker,
     tokenize_filename,
@@ -120,6 +121,30 @@ def test_mentioned_ticker_ignores_the_extension():
     # A ticker named "PDF" would be a wild coincidence, but make sure the
     # extension itself is never accidentally treated as a mention.
     assert find_ticker_mentioned_anywhere("random notes.pdf", ["PDF"]) is None
+
+
+def test_mentioned_in_text_finds_single_real_ticker():
+    assert find_ticker_mentioned_in_text("Quick notes on ZBQ ahead of earnings", _KNOWN_TICKERS) == "ZBQ"
+
+
+def test_mentioned_in_text_survives_punctuation_that_would_break_the_filename_variant():
+    # The whole reason this is a separate function from
+    # find_ticker_mentioned_anywhere(): that one runs _strip_extension()
+    # first, which blindly splits on the last "." in the string — fine
+    # for a real filename, but would truncate this sentence right after
+    # "earnings" before ever tokenizing "Thoughts". Prose has periods;
+    # this function must not treat them as a file extension.
+    text = "Notes on ZBQ earnings. Thoughts inside."
+    assert find_ticker_mentioned_in_text(text, _KNOWN_TICKERS) == "ZBQ"
+
+
+def test_mentioned_in_text_returns_none_when_ambiguous():
+    text = "Comparing ZBQ against ZPAX this quarter"
+    assert find_ticker_mentioned_in_text(text, _KNOWN_TICKERS) is None
+
+
+def test_mentioned_in_text_returns_none_when_absent():
+    assert find_ticker_mentioned_in_text("Just some notes with no company mentioned", _KNOWN_TICKERS) is None
 
 
 def test_ambiguous_uppercase_mentions_found():

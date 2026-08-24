@@ -157,6 +157,38 @@ def find_ticker_mentioned_anywhere(filename: str, known_tickers: list[str]) -> s
     return None
 
 
+def find_ticker_mentioned_in_text(text: str, known_tickers: list[str]) -> str | None:
+    """
+    Same contract as find_ticker_mentioned_anywhere() above (a single
+    unambiguous real-ticker match, or None) but for arbitrary prose text
+    — e.g. an email Subject line — rather than a filename. Deliberately
+    NOT built on top of find_ticker_mentioned_anywhere() itself: that
+    function runs _strip_extension() first, which blindly splits on the
+    last "." in the string. That's correct for a filename (real
+    extension), but would silently corrupt an ordinary sentence with a
+    period in it — "Notes on ZBQ earnings. Thoughts inside." would get
+    truncated to "Notes on ZBQ earnings" before ever being tokenized,
+    which happens to still work for that particular example but is the
+    wrong operation to be doing to prose at all. This tokenizes the raw
+    text directly instead.
+
+    Same safety scope as its filename sibling: only ever matches a
+    ticker that's already a real, existing folder, never proposes a new
+    one, and returns None (defer to Needs Review) the moment more than
+    one distinct real ticker is mentioned — genuinely ambiguous text
+    isn't this function's job to resolve.
+    """
+    matches = set()
+    for token in _TICKER_TOKEN_PATTERN.findall(text):
+        found = find_known_ticker(token, known_tickers)
+        if found:
+            matches.add(found)
+
+    if len(matches) == 1:
+        return matches.pop()
+    return None
+
+
 def find_ambiguous_uppercase_mentions(filename: str, known_tickers: list[str]) -> list[str]:
     """
     Meant to be tried after find_ticker_mentioned_anywhere() has already

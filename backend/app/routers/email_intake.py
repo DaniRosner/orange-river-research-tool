@@ -23,6 +23,14 @@ earlier version of this file did exactly that, and a real test forward
 confirmed the gap: the file existed in Dropbox but never showed up
 anywhere in the app, since Needs Review is the one folder the frontend
 actually tracks and lists).
+
+A batch of emails forwarded together via Gmail/Outlook's "Forward as
+attachment" (each original message attached as its own .eml, rather
+than one email's own body) is handled separately — see
+_is_nested_email/_file_nested_email below. The outer email's one
+recipient address can't route a batch covering multiple companies, so
+each attached .eml is routed independently by what's in it (its own
+Subject line), not by the outer address.
 """
 
 import hashlib
@@ -33,7 +41,7 @@ import logging
 from fastapi import APIRouter, Request, UploadFile
 
 from app.config import settings
-from app.services import activity_log, dropbox_client, email_render, notifications, ticker_registry
+from app.services import activity_log, dropbox_client, eml_parse, email_render, notifications, sorting, ticker_registry
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +98,55 @@ def _ticker_tag_from_recipient(recipient: str) -> str | None:
     if "+" in local_part:
         local_part = local_part.split("+", 1)[1].strip()
     return local_part or None
+
+
+def _is_nested_email(attachment: UploadFile) -> bool:
+    """True for an attachment that is itself a whole email — Gmail/
+    Outlook's "Forward as attachment" on a batch of selected messages
+    sends each original message this way, one per attachment, rather
+    than as the outer email's own body. Checked two ways (either is
+    enough) since real-world delivery of nested messages varies: some
+    clients/servers set a proper message/rfc822 content type, others
+    just carry a .eml-named file with a generic content type."""
+    content_type = (attachment.content_type or "").lower()
+    filename = (attachment.filename or "").lower()
+    return content_type == "message/rfc822" or filename.endswith(".eml")
+
+
+def _file_nested_email(folder_for_unresolved: str, data: bytes, known: dict[str, str]) -> str:
+    """Routes one .eml attachment (a single original message out of a
+    "Forward as attachment" batch) by what's actually in it, since the
+    outer email's one recipient address can't tell different attached
+    messages apart when they're about different companies. Subject-
+    line-only detection (see sorting.find_ticker_mentioned_in_text) —
+    matches a real, already-existing ticker or backs off to Needs
+    Review, same safety contract as everywhere else ticker routing
+    happens in this app. Returns the actual filename it was saved as."""
+    parsed = eml_parse.parse_eml(data)
+    pdf_bytes = email_render.render_email_to_pdf(
+        parsed["subject"], parsed["sender"], parsed["date_str"], parsed["body_text"]
+    )
+    base_filename = (parsed["subject"] or "Forwarded email").strip()[:80]
+
+    matched_ticker = sorting.find_ticker_mentioned_in_text(parsed["subject"], list(known.keys()))
+    if matched_ticker:
+        folder = f"{ticker_registry.folder_path_for_status(known[matched_ticker])}/{matched_ticker}"
+        pdf_filename = f"{base_filename}.pdf"
+        real_ticker = matched_ticker
+    else:
+        folder = folder_for_unresolved
+        pdf_filename = f"[ticker unclear] {base_filename}.pdf"
+        real_ticker = None
+
+    actual_filename = dropbox_client.upload_file(f"{folder}/{pdf_filename}", pdf_bytes, overwrite=False)
+    activity_log.record(
+        _EMAIL_INTAKE_USER,
+        "uploaded",
+        ticker=real_ticker,
+        filename=actual_filename,
+        detail="forwarded email (from a bulk forward-as-attachment batch)",
+    )
+    return actual_filename
 
 
 def _notify_needs_sorting(ticker_tag: str, preview_url: str) -> None:
@@ -179,6 +236,13 @@ async def inbound_email(request: Request) -> dict:
         if not isinstance(attachment, UploadFile):
             continue
         data = await attachment.read()
+        if _is_nested_email(attachment):
+            # A whole other email attached — one of a batch from
+            # "Forward as attachment," not a real file the user meant to
+            # keep alongside this one. Routed by its own Subject line,
+            # not filed under whatever this outer email resolved to.
+            saved_attachments.append(_file_nested_email(settings.dropbox_needs_review_path, data, known))
+            continue
         attachment_filename = attachment.filename if real_ticker else f"[{ticker_tag.upper()}] {attachment.filename}"
         saved_name = dropbox_client.upload_file(f"{folder}/{attachment_filename}", data, overwrite=False)
         saved_attachments.append(saved_name)
