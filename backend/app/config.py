@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # Inbound email intake (see app/routers/email_intake.py) — lets the user
     # forward an email straight into a ticker's Dropbox folder from
     # anywhere (phone, webmail), no app open. Mailgun receives the
-    # forwarded email at intake+TICKER@<mailgun-inbound-domain> and POSTs
+    # forwarded email at TICKER@<mailgun-inbound-domain> and POSTs
     # it to this app's webhook; mailgun_webhook_signing_key is Mailgun's
     # own per-account signing key (Settings -> Security in the Mailgun
     # dashboard), used to verify a webhook POST actually came from Mailgun

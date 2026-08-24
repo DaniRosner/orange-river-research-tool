@@ -39,13 +39,17 @@ def test_verify_signature_rejects_when_no_signing_key_configured(monkeypatch):
     assert email_intake._verify_signature(timestamp, token, signature) is False
 
 
-def test_ticker_tag_from_recipient_extracts_plus_tag():
+def test_ticker_tag_from_recipient_uses_whole_local_part():
+    assert email_intake._ticker_tag_from_recipient("ZPAX@sandbox123.mailgun.org") == "ZPAX"
+
+
+def test_ticker_tag_from_recipient_extracts_plus_tag_when_present():
     assert email_intake._ticker_tag_from_recipient("intake+ZPAX@sandbox123.mailgun.org") == "ZPAX"
 
 
-def test_ticker_tag_from_recipient_none_without_plus():
-    assert email_intake._ticker_tag_from_recipient("intake@sandbox123.mailgun.org") is None
+def test_ticker_tag_from_recipient_none_for_empty_local_part():
+    assert email_intake._ticker_tag_from_recipient("@sandbox123.mailgun.org") is None
 
 
-def test_ticker_tag_from_recipient_none_for_empty_tag():
+def test_ticker_tag_from_recipient_none_for_empty_tag_after_plus():
     assert email_intake._ticker_tag_from_recipient("intake+@sandbox123.mailgun.org") is None

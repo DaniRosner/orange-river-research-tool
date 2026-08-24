@@ -1,16 +1,19 @@
 """
-Inbound email intake: the user forwards an email to intake+TICKER@<mailgun
-inbound domain>, Mailgun parses it and POSTs the result here as a plain
-webhook (not an MCP tool — this is only ever hit by Mailgun's own
-servers, never by an AI). Lets him get an email into a ticker's real
-Dropbox folder from anywhere (phone, webmail), no app open — the drag-
-onto-a-folder-card path in the frontend covers the "already have the app
-open" case; this covers everywhere else.
+Inbound email intake: the user forwards an email straight to
+TICKER@<mailgun inbound domain>, Mailgun parses it and POSTs the result
+here as a plain webhook (not an MCP tool — this is only ever hit by
+Mailgun's own servers, never by an AI). Lets him get an email into a
+ticker's real Dropbox folder from anywhere (phone, webmail), no app
+open — the drag-onto-a-folder-card path in the frontend covers the
+"already have the app open" case; this covers everywhere else.
 
-Ticker routing is plus-addressing (intake+ZPAX@...), not subject
-parsing — his own real forwarded subjects ("Fwd: TTAM on VIC") don't
-reliably carry a clean ticker, so guessing from them would need the same
-fallback anyway. An unresolved/ambiguous ticker never gets guessed at:
+Ticker routing is address-based, not subject parsing — his own real
+forwarded subjects ("Fwd: TTAM on VIC") don't reliably carry a clean
+ticker, so guessing from them would need the same fallback anyway. The
+whole local part of the recipient address is taken as the ticker tag
+(a fixed "+tag" style address also still works, but isn't required —
+see _ticker_tag_from_recipient). An unresolved/ambiguous ticker never
+gets guessed at:
 unlike save_final's AI-driven flow, there's no interactive turn here to
 ask a clarifying question, so it lands in the app's own existing Needs
 Review folder instead — reusing that feature's already-built "assign to
@@ -76,14 +79,17 @@ def _header_value(message_headers_json: str, header_name: str) -> str:
 
 
 def _ticker_tag_from_recipient(recipient: str) -> str | None:
-    """Pulls TICKER out of a plus-addressed recipient like
-    "intake+ZPAX@sandbox123.mailgun.org" — None if there's no '+' tag at
-    all (nothing to route it to)."""
-    local_part = recipient.split("@", 1)[0]
-    if "+" not in local_part:
-        return None
-    tag = local_part.split("+", 1)[1].strip()
-    return tag or None
+    """Pulls the ticker tag out of the recipient's local part (everything
+    before the '@'). the user just addresses the forward directly to the
+    ticker itself — "ZPAX@sandbox123.mailgun.org" — so the whole local
+    part is the tag; a '+' is also still accepted ("anything+ZPAX@...")
+    for anyone who'd rather keep a fixed base address and vary the tag
+    after a plus, but it's optional, not required. None only for a
+    genuinely empty local part (nothing to route it to at all)."""
+    local_part = recipient.split("@", 1)[0].strip()
+    if "+" in local_part:
+        local_part = local_part.split("+", 1)[1].strip()
+    return local_part or None
 
 
 def _notify_needs_sorting(ticker_tag: str, preview_url: str) -> None:
