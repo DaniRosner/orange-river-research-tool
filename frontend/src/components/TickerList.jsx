@@ -949,7 +949,9 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
                   />
                 )}
                 <FileThumbnail ticker={null} filename={filename} />
-                <span className="file-row__name">{filename}</span>{' '}
+                <span className="file-row__name" title="Open in Dropbox" onClick={() => handleOpenFile(filename)}>
+                  {filename}
+                </span>{' '}
                 <input
                   type="text"
                   placeholder="Ticker"

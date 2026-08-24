@@ -405,6 +405,7 @@ li {
 
 .file-row__name {
   flex: 1;
+  cursor: pointer;
 }
 
 .file-row__meta {
