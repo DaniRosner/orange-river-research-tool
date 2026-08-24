@@ -120,7 +120,14 @@ def _resolve_upload(
     activity_log.record(
         user, "uploaded", ticker=log_ticker, filename=actual_filename, relative_path=log_relative_path
     )
-    return {"status": success_status, "filename": actual_filename, **extra}
+    # `renamed` reflects a REAL Dropbox-side autorename (only possible
+    # here via the "keep_both" duplicate path above, where overwrite is
+    # deliberately False) — `filename` at this point already reflects
+    # any of this endpoint's own upstream renaming (e.g. .eml -> .pdf
+    # conversion), so comparing against it, not the original filename
+    # the caller sent, is what keeps this from misreporting a routine,
+    # non-conflicting rename as a naming conflict.
+    return {"status": success_status, "filename": actual_filename, "renamed": actual_filename != filename, **extra}
 
 
 def _maybe_ask_subfolder(folder: str, relative_path: str | None) -> dict | None:

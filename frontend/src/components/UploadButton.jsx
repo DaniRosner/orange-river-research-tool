@@ -312,10 +312,17 @@ function UploadButton({ onUploaded }) {
           ? `"${item.file.name}" is already saved under ${where}.`
           : `"${item.file.name}" is already in Needs Review.`
       } else {
-        const renamed = result.filename && result.filename !== item.file.name
-        const displayName = renamed
+        // `result.renamed` (set by _resolve_upload) is only true for a
+        // REAL Dropbox-side rename-on-conflict — filename !== item.file.name
+        // alone isn't enough to mean that, since the backend also
+        // deliberately renames a .eml to .pdf on the way in (see
+        // files.py's upload_file), which isn't a conflict at all.
+        const converted = !result.renamed && result.filename && result.filename !== item.file.name
+        const displayName = result.renamed
           ? `"${item.file.name}" (saved as "${result.filename}" — name conflict)`
-          : `"${item.file.name}"`
+          : converted
+            ? `"${item.file.name}" (converted to "${result.filename}")`
+            : `"${item.file.name}"`
         if (result.status === 'needs_review') {
           message = `${displayName} didn't match a ticker — sent to Needs Review.`
         } else if (result.status === 'filed_category') {

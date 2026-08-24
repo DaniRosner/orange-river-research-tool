@@ -227,9 +227,15 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
         setListMessage(`"${file.name}" filed under ${result.ticker}. Heads up: ${result.suffix_warning}`)
       } else if (result.note) {
         setListMessage(`"${file.name}" is already saved under ${ticker}.`)
+      } else if (result.renamed) {
+        // A real Dropbox-side rename-on-conflict — result.renamed (set
+        // by _resolve_upload) only reflects that, not the deliberate
+        // .eml -> .pdf conversion the backend also does on the way in.
+        setListMessage(`"${file.name}" saved as "${result.filename}" under ${ticker} (name conflict).`)
+      } else if (result.filename && result.filename !== file.name) {
+        setListMessage(`"${file.name}" converted to "${result.filename}" and saved under ${ticker}.`)
       } else {
-        const renamed = result.filename && result.filename !== file.name
-        setListMessage(renamed ? `"${file.name}" saved as "${result.filename}" under ${ticker} (name conflict).` : `"${file.name}" saved under ${ticker}.`)
+        setListMessage(`"${file.name}" saved under ${ticker}.`)
       }
       processNextCardDrop(ticker)
     } catch (err) {
