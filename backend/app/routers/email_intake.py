@@ -26,11 +26,17 @@ actually tracks and lists).
 
 A batch of emails forwarded together via Gmail/Outlook's "Forward as
 attachment" (each original message attached as its own .eml, rather
-than one email's own body) is handled separately — see
-_is_nested_email/_file_nested_email below. The outer email's one
-recipient address can't route a batch covering multiple companies, so
-each attached .eml is routed independently by what's in it (its own
-Subject line), not by the outer address.
+than one email's own body) is handled by the same rule, applied once
+per attachment instead of once for the whole request — see
+_is_nested_email/_resolve_and_file_email below. One consistent
+priority order covers every case: an explicit address that resolves to
+a real ticker always wins (for the outer email AND every nested
+attachment — addressing a batch to one real ticker deliberately files
+everything in it there, e.g. "I want all of these in one bucket").
+Only when the address doesn't resolve to a real ticker does each
+individual email (the outer one, or each nested attachment
+independently) fall back to scanning its own Subject line for an
+unambiguous real ticker, before finally deferring to Needs Review.
 """
 
 import hashlib
@@ -113,30 +119,46 @@ def _is_nested_email(attachment: UploadFile) -> bool:
     return content_type == "message/rfc822" or filename.endswith(".eml")
 
 
-def _file_nested_email(folder_for_unresolved: str, data: bytes, known: dict[str, str]) -> str:
-    """Routes one .eml attachment (a single original message out of a
-    "Forward as attachment" batch) by what's actually in it, since the
-    outer email's one recipient address can't tell different attached
-    messages apart when they're about different companies. Subject-
-    line-only detection (see sorting.find_ticker_mentioned_in_text) —
-    matches a real, already-existing ticker or backs off to Needs
-    Review, same safety contract as everywhere else ticker routing
-    happens in this app. Returns the actual filename it was saved as."""
-    parsed = eml_parse.parse_eml(data)
-    pdf_bytes = email_render.render_email_to_pdf(
-        parsed["subject"], parsed["sender"], parsed["date_str"], parsed["body_text"]
-    )
-    base_filename = (parsed["subject"] or "Forwarded email").strip()[:80]
+def _resolve_and_file_email(
+    subject: str,
+    sender: str,
+    date_str: str,
+    body_text: str,
+    known: dict[str, str],
+    explicit_resolution: dict | None,
+    unresolved_tag: str | None,
+) -> tuple[str, str | None, str]:
+    """Shared by the outer email and every nested .eml attachment (see
+    module docstring for the priority order this implements): renders
+    subject/sender/date/body into its own PDF and files it, then logs
+    the save. `explicit_resolution` is the recipient address's own
+    ticker_registry.resolve_ticker() result — a "matched" real ticker
+    there always wins over content detection. Otherwise falls back to
+    sorting.find_ticker_mentioned_in_text() against `subject`, then
+    finally to Needs Review. `unresolved_tag`, shown in the Needs Review
+    filename if it gets that far, is the typed address tag for the
+    outer email, or None for a nested attachment (which has no typed
+    tag of its own — see the "[ticker unclear]" fallback label).
+    Returns (actual_filename, real_ticker_or_None, folder_it_landed_in).
+    """
+    pdf_bytes = email_render.render_email_to_pdf(subject, sender, date_str, body_text)
+    base_filename = (subject or "Forwarded email").strip()[:80]
 
-    matched_ticker = sorting.find_ticker_mentioned_in_text(parsed["subject"], list(known.keys()))
-    if matched_ticker:
-        folder = f"{ticker_registry.folder_path_for_status(known[matched_ticker])}/{matched_ticker}"
+    if explicit_resolution and explicit_resolution["kind"] == "matched":
+        real_ticker = explicit_resolution["ticker"]
+        folder = f"{ticker_registry.folder_path_for_status(explicit_resolution['status'])}/{real_ticker}"
         pdf_filename = f"{base_filename}.pdf"
-        real_ticker = matched_ticker
     else:
-        folder = folder_for_unresolved
-        pdf_filename = f"[ticker unclear] {base_filename}.pdf"
-        real_ticker = None
+        detected = sorting.find_ticker_mentioned_in_text(subject, list(known.keys()))
+        if detected:
+            real_ticker = detected
+            folder = f"{ticker_registry.folder_path_for_status(known[detected])}/{detected}"
+            pdf_filename = f"{base_filename}.pdf"
+        else:
+            real_ticker = None
+            folder = settings.dropbox_needs_review_path
+            label = f"[{unresolved_tag}]" if unresolved_tag else "[ticker unclear]"
+            pdf_filename = f"{label} {base_filename}.pdf"
 
     actual_filename = dropbox_client.upload_file(f"{folder}/{pdf_filename}", pdf_bytes, overwrite=False)
     activity_log.record(
@@ -144,9 +166,9 @@ def _file_nested_email(folder_for_unresolved: str, data: bytes, known: dict[str,
         "uploaded",
         ticker=real_ticker,
         filename=actual_filename,
-        detail="forwarded email (from a bulk forward-as-attachment batch)",
+        detail="forwarded email",
     )
-    return actual_filename
+    return actual_filename, real_ticker, folder
 
 
 def _notify_needs_sorting(ticker_tag: str, preview_url: str) -> None:
@@ -203,30 +225,17 @@ async def inbound_email(request: Request) -> dict:
     # name or a save_final ticker argument — uppercase it before
     # resolving so resolve_ticker's lowercase-looks-like-a-sentence
     # heuristic (meant for text parsed out of a filename) never applies
-    # here.
+    # here. See module docstring for the full priority order this feeds
+    # into: passed as-is to _resolve_and_file_email below, which only
+    # actually uses it when its kind is "matched" — a real ticker there
+    # wins outright, for the outer email AND every nested .eml
+    # attachment (addressing a batch to one real ticker means "all of
+    # these go in one bucket").
     resolution = ticker_registry.resolve_ticker(ticker_tag.upper(), known)
 
-    pdf_bytes = email_render.render_email_to_pdf(subject, sender, date_str, body_text)
-    base_filename = (subject or "Forwarded email").strip()[:80]
-
-    if resolution["kind"] == "matched":
-        folder = f"{ticker_registry.folder_path_for_status(resolution['status'])}/{resolution['ticker']}"
-        real_ticker = resolution["ticker"]
-        pdf_filename = f"{base_filename}.pdf"
-    else:
-        # new_ticker_needs_status / confirm_needed / not_a_ticker — no
-        # interactive turn to ask a clarifying question here, so this
-        # goes to the app's own Needs Review folder (flat, no per-ticker
-        # subfolders — see files.py's list_needs_review) rather than
-        # guessing a bucket or silently creating a folder. The typed
-        # ticker tag is prefixed onto the filename, since Needs Review
-        # has nowhere else to show it, so the user sees at a glance what he
-        # typed when he goes to assign it a real ticker.
-        folder = settings.dropbox_needs_review_path
-        real_ticker = None
-        pdf_filename = f"[{ticker_tag.upper()}] {base_filename}.pdf"
-
-    actual_filename = dropbox_client.upload_file(f"{folder}/{pdf_filename}", pdf_bytes, overwrite=False)
+    actual_filename, real_ticker, folder = _resolve_and_file_email(
+        subject, sender, date_str, body_text, known, resolution, ticker_tag.upper()
+    )
     preview_url = dropbox_client.get_shareable_link(f"{folder}/{actual_filename}")
 
     attachment_count = int(form.get("attachment-count", "0") or "0")
@@ -239,21 +248,19 @@ async def inbound_email(request: Request) -> dict:
         if _is_nested_email(attachment):
             # A whole other email attached — one of a batch from
             # "Forward as attachment," not a real file the user meant to
-            # keep alongside this one. Routed by its own Subject line,
-            # not filed under whatever this outer email resolved to.
-            saved_attachments.append(_file_nested_email(settings.dropbox_needs_review_path, data, known))
+            # keep alongside this one. Same resolution passed through:
+            # an explicit real-ticker address still wins for this
+            # attachment too; only falls back to its own Subject line
+            # when the outer address didn't resolve to a real ticker.
+            parsed = eml_parse.parse_eml(data)
+            nested_filename, _, _ = _resolve_and_file_email(
+                parsed["subject"], parsed["sender"], parsed["date_str"], parsed["body_text"], known, resolution, None
+            )
+            saved_attachments.append(nested_filename)
             continue
         attachment_filename = attachment.filename if real_ticker else f"[{ticker_tag.upper()}] {attachment.filename}"
         saved_name = dropbox_client.upload_file(f"{folder}/{attachment_filename}", data, overwrite=False)
         saved_attachments.append(saved_name)
-
-    activity_log.record(
-        _EMAIL_INTAKE_USER,
-        "uploaded",
-        ticker=real_ticker,
-        filename=actual_filename,
-        detail=f"forwarded email ({len(saved_attachments)} attachment(s))" if saved_attachments else "forwarded email",
-    )
 
     if real_ticker is None:
         _notify_needs_sorting(ticker_tag, preview_url)
