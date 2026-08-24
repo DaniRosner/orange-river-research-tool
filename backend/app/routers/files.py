@@ -10,7 +10,7 @@
 from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
 
 from app.config import settings
-from app.services import activity_log, auth, category_routing, dropbox_client, thumbnails, ticker_registry
+from app.services import activity_log, auth, category_routing, dropbox_client, email_render, eml_parse, thumbnails, ticker_registry
 from app.services.sorting import (
     find_ambiguous_uppercase_mentions,
     find_known_ticker,
@@ -299,6 +299,25 @@ async def upload_file(
     "keep_both" — see `_resolve_upload`.
     """
     content = await file.read()
+
+    # A raw .eml (dragged straight out of a desktop mail client — see
+    # TickerList.jsx's card drop, or UploadButton's generic drop zone)
+    # isn't readable/openable through Dropbox's own preview, unlike a
+    # PDF. Convert it server-side before anything else runs, reusing
+    # the same eml_parse/email_render pair the email-intake webhook
+    # already uses for a forwarded email's body. Only the extension is
+    # swapped (.eml -> .pdf) here, not the base filename — every ticker-
+    # resolution step below reads file.filename directly (leading
+    # token, mentioned-anywhere, etc.), and an .eml's filename is
+    # usually already the original subject line (Gmail names it that
+    # way), which is exactly what those steps need to keep working
+    # unchanged.
+    if file.filename and file.filename.lower().endswith(".eml"):
+        parsed = eml_parse.parse_eml(content)
+        content = email_render.render_email_to_pdf(
+            parsed["subject"], parsed["sender"], parsed["date_str"], parsed["body_text"]
+        )
+        file.filename = f"{file.filename[:-4]}.pdf"
 
     if len(content) > MAX_SIMPLE_UPLOAD_BYTES:
         raise HTTPException(
