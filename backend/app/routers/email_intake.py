@@ -12,8 +12,14 @@ parsing — his own real forwarded subjects ("Fwd: TTAM on VIC") don't
 reliably carry a clean ticker, so guessing from them would need the same
 fallback anyway. An unresolved/ambiguous ticker never gets guessed at:
 unlike save_final's AI-driven flow, there's no interactive turn here to
-ask a clarifying question, so it's parked in a fixed holding folder and
-the user gets a plain notification email instead.
+ask a clarifying question, so it lands in the app's own existing Needs
+Review folder instead — reusing that feature's already-built "assign to
+a ticker" flow (see files.py's assign_needs_review_file) rather than
+inventing a separate, invisible-to-the-frontend holding folder (an
+earlier version of this file did exactly that, and a real test forward
+confirmed the gap: the file existed in Dropbox but never showed up
+anywhere in the app, since Needs Review is the one folder the frontend
+actually tracks and lists).
 """
 
 import hashlib
@@ -29,12 +35,6 @@ from app.services import activity_log, dropbox_client, email_render, notificatio
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Real folder holding place for anything that couldn't be confidently
-# routed (unknown/near-miss ticker tag) — never silently guessed, never
-# silently dropped. Not one of the three real status folders, so it can
-# never be mistaken for a genuinely sorted ticker.
-_NEEDS_SORTING_PATH = "/Shared/Email Intake Needs Sorting"
 
 _EMAIL_INTAKE_USER = {"full_name": "Email Intake", "email": "email-intake@yourfirm.local"}
 
@@ -86,7 +86,7 @@ def _ticker_tag_from_recipient(recipient: str) -> str | None:
     return tag or None
 
 
-def _notify_needs_sorting(ticker_tag: str, folder: str, preview_url: str) -> None:
+def _notify_needs_sorting(ticker_tag: str, preview_url: str) -> None:
     if not notifications.notifications_enabled():
         return
     notifications.send_bridge_notification(
@@ -94,7 +94,7 @@ def _notify_needs_sorting(ticker_tag: str, folder: str, preview_url: str) -> Non
             {
                 "sender": "Email Intake",
                 "ticker": ticker_tag,
-                "note": f"Forwarded email couldn't be auto-filed under a known ticker — parked in {folder}. {preview_url}",
+                "note": f"Forwarded email couldn't be auto-filed under a known ticker — check the Needs Review tab in the app. {preview_url}",
             }
         ]
     )
@@ -144,17 +144,24 @@ async def inbound_email(request: Request) -> dict:
     resolution = ticker_registry.resolve_ticker(ticker_tag.upper(), known)
 
     pdf_bytes = email_render.render_email_to_pdf(subject, sender, date_str, body_text)
-    pdf_filename = f"{(subject or 'Forwarded email').strip()[:80]}.pdf"
+    base_filename = (subject or "Forwarded email").strip()[:80]
 
     if resolution["kind"] == "matched":
         folder = f"{ticker_registry.folder_path_for_status(resolution['status'])}/{resolution['ticker']}"
         real_ticker = resolution["ticker"]
+        pdf_filename = f"{base_filename}.pdf"
     else:
         # new_ticker_needs_status / confirm_needed / not_a_ticker — no
-        # interactive turn to ask a clarifying question here, so park it
-        # rather than guess a bucket or silently create a folder.
-        folder = f"{_NEEDS_SORTING_PATH}/{ticker_tag.upper()}"
+        # interactive turn to ask a clarifying question here, so this
+        # goes to the app's own Needs Review folder (flat, no per-ticker
+        # subfolders — see files.py's list_needs_review) rather than
+        # guessing a bucket or silently creating a folder. The typed
+        # ticker tag is prefixed onto the filename, since Needs Review
+        # has nowhere else to show it, so the user sees at a glance what he
+        # typed when he goes to assign it a real ticker.
+        folder = settings.dropbox_needs_review_path
         real_ticker = None
+        pdf_filename = f"[{ticker_tag.upper()}] {base_filename}.pdf"
 
     actual_filename = dropbox_client.upload_file(f"{folder}/{pdf_filename}", pdf_bytes, overwrite=False)
     preview_url = dropbox_client.get_shareable_link(f"{folder}/{actual_filename}")
@@ -166,7 +173,8 @@ async def inbound_email(request: Request) -> dict:
         if not isinstance(attachment, UploadFile):
             continue
         data = await attachment.read()
-        saved_name = dropbox_client.upload_file(f"{folder}/{attachment.filename}", data, overwrite=False)
+        attachment_filename = attachment.filename if real_ticker else f"[{ticker_tag.upper()}] {attachment.filename}"
+        saved_name = dropbox_client.upload_file(f"{folder}/{attachment_filename}", data, overwrite=False)
         saved_attachments.append(saved_name)
 
     activity_log.record(
@@ -178,7 +186,7 @@ async def inbound_email(request: Request) -> dict:
     )
 
     if real_ticker is None:
-        _notify_needs_sorting(ticker_tag, folder, preview_url)
+        _notify_needs_sorting(ticker_tag, preview_url)
 
     return {
         "status": "saved" if real_ticker else "needs_sorting",
