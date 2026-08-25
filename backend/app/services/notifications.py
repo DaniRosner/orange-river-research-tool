@@ -30,10 +30,14 @@ def send_bridge_notification(messages: list[dict]) -> bool:
     them unmarked so the next poll retries instead of silently dropping
     the notification."""
     lines = [f"- {m['sender']} sent something on {m['ticker']}" + (f": {m['note']}" if m["note"] else "") for m in messages]
-    body = "New research-report activity in the Your Firm bridge:\n\n" + "\n".join(lines)
+    body = f"New research-report activity in the {settings.client_display_name} bridge:\n\n" + "\n".join(lines)
 
     email = EmailMessage()
-    email["Subject"] = "Your Firm bridge: new update" if len(messages) == 1 else f"Your Firm bridge: {len(messages)} new updates"
+    email["Subject"] = (
+        f"{settings.client_display_name} bridge: new update"
+        if len(messages) == 1
+        else f"{settings.client_display_name} bridge: {len(messages)} new updates"
+    )
     email["From"] = settings.bridge_notify_smtp_user
     email["To"] = settings.bridge_notify_email
     email.set_content(body)

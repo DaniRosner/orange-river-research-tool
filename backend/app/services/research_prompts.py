@@ -24,19 +24,21 @@ about which one wins. Every template's placeholder ticker ("MITK" in
 the user's originals) is templated as {ticker}.
 """
 
+from app.config import settings
+
 _CLOSING_NOTE = """
 
 ---
-A NOTE ON FORMAT AND PROCESS (not part of the user's original brief, added by
+A NOTE ON FORMAT AND PROCESS (not part of {primary_user_name}'s original brief, added by
 the bridge): draft this as plain text/markdown in the chat — don't generate
-a Word doc or PDF yourself. Show the user the draft and let him react; revise
-based on his feedback for as long as that takes. Only once he's explicitly
+a Word doc or PDF yourself. Show {primary_user_name} the draft and let them react; revise
+based on their feedback for as long as that takes. Only once they've explicitly
 approved a specific version as final, call save_final — it renders your
 markdown into this system's own formatted PDF automatically (real
 headings, styled tables, a recommendation box, and true per-page
 footnotes), which is the only formatting that actually matters here.
 
-Whatever you draft should also satisfy the user's standing content
+Whatever you draft should also satisfy {primary_user_name}'s standing content
 requirements (see save_final's docstring for the full text) — most
 relevantly: cite specific factual claims inline with bracketed reference
 numbers (e.g. "revenue grew 93% YoY [3]") backed by a numbered "Sources:"
@@ -277,7 +279,7 @@ _QUARTERLY_EARNINGS_DIGEST = """You are a senior equity research analyst produci
 
 TICKER: {ticker}
 
-If the user has attached this quarter's earnings materials, use them. From the attachments and/or web search, automatically determine: company name, exchange, sector, which fiscal quarter/year this covers, report date, call date, stock price reaction, market cap, and Wall Street consensus estimates. Do NOT ask for any of this you can find yourself. If something cannot be found, mark "[N/A]" and move on.
+If {primary_user_name} has attached this quarter's earnings materials, use them. From the attachments and/or web search, automatically determine: company name, exchange, sector, which fiscal quarter/year this covers, report date, call date, stock price reaction, market cap, and Wall Street consensus estimates. Do NOT ask for any of this you can find yourself. If something cannot be found, mark "[N/A]" and move on.
 
 PROCESS:
 1. Read any attached files first. Identify company, quarter, and period from the materials.
@@ -331,11 +333,11 @@ STYLE RULES:
 - If a section has minimal data, keep it to 1–2 lines — never pad.
 - Total target: roughly 2-3 pages of content once rendered.
 
-OPTIONAL ADD-ONS (only if the user asks for one of these):
+OPTIONAL ADD-ONS (only if {primary_user_name} asks for one of these):
 - Also include a peer valuation comp table (EV/EBITDA, P/E, revenue growth) for 3–5 closest comps.
 - Also include a management credibility table: prior guidance vs. actuals for last 4 quarters.
-- Score specific named thesis legs in the Thesis & Risk Check if the user gives you the thesis legs.
-- Compare this quarter's results and tone to the prior quarter's digest, if the user has shared or the bridge has a pending one — check get_pending.""" + _CLOSING_NOTE
+- Score specific named thesis legs in the Thesis & Risk Check if {primary_user_name} gives you the thesis legs.
+- Compare this quarter's results and tone to the prior quarter's digest, if {primary_user_name} has shared or the bridge has a pending one — check get_pending.""" + _CLOSING_NOTE
 
 PROMPTS: dict[str, str] = {
     "industry_deep_dive": _INDUSTRY_DEEP_DIVE,
@@ -354,4 +356,4 @@ def get_prompt(report_type: str, ticker: str) -> str | None:
     template = PROMPTS.get(report_type)
     if template is None:
         return None
-    return template.format(ticker=ticker.strip().upper())
+    return template.format(ticker=ticker.strip().upper(), primary_user_name=settings.primary_user_name)

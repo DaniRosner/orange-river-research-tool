@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     dropbox_refresh_token: str = ""
     backend_cors_origins: str = "http://localhost:5173"
 
+    # Naming used throughout user- and AI-facing text (PDF footer, login
+    # page, error messages, notification emails, MCP tool descriptions,
+    # research-brief prompts) — generic defaults so a fresh clone works
+    # immediately with no configuration. Set the real values in the
+    # actual (gitignored) .env for a real deployment.
+    primary_user_name: str = "the user"
+    client_display_name: str = "Your Firm"
+    product_name: str = "Research Tool"
+
     # Per-user Dropbox sign-in (see app/services/auth.py) — separate from
     # dropbox_refresh_token above, which is the one fixed service account
     # every ticker/file operation still runs as regardless of who's signed

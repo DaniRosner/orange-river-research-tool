@@ -93,7 +93,7 @@ def exchange_code_for_user(code: str) -> dict:
     if team_id is None or team_id != dropbox_client.get_team_id():
         raise HTTPException(
             status_code=403,
-            detail="This Dropbox account isn't part of Your Firm's team — access denied.",
+            detail=f"This Dropbox account isn't part of {settings.client_display_name}'s team — access denied.",
         )
 
     return {

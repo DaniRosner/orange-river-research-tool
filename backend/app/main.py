@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
                 notify_task.cancel()
 
 
-app = FastAPI(title="Research Tool", lifespan=lifespan)
+app = FastAPI(title=settings.product_name, lifespan=lifespan)
 
 # Signs the session cookie that /auth/* uses to remember who's signed in
 # (see app/services/auth.py). same_site="none" + https_only=True because

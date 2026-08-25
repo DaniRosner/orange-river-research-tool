@@ -27,6 +27,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import BaseDocTemplate, Frame, KeepTogether, PageTemplate, Paragraph, Spacer, Table, TableStyle
 
+from app.config import settings
+
 _NAVY = colors.HexColor("#1a3a5c")
 _REC_LABEL_BG = colors.HexColor("#2f5233")
 _REC_VALUE_BG = colors.HexColor("#eef2ea")
@@ -462,7 +464,7 @@ def _draw_header_footer(canvas, title: str, date_str: str, page: int) -> None:
     canvas.setStrokeColor(_RULE_GRAY)
     canvas.setLineWidth(0.5)
     canvas.line(_MARGIN_X, PAGE_H - 0.62 * inch, PAGE_W - _MARGIN_X, PAGE_H - 0.62 * inch)
-    canvas.drawString(_MARGIN_X, 0.4 * inch, "Confidential — Your Firm Research")
+    canvas.drawString(_MARGIN_X, 0.4 * inch, f"Confidential — {settings.client_display_name} Research")
     canvas.drawRightString(PAGE_W - _MARGIN_X, 0.4 * inch, f"Page {page}")
 
 

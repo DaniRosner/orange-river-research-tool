@@ -4,6 +4,7 @@ import NewTickerButton from './NewTickerButton.jsx'
 import { api } from '../api.js'
 import { TABS, TAB_SLUGS, SLUGS_TO_TAB } from '../tabSlugs.js'
 import logo from '../assets/logo.png'
+import { PRODUCT_NAME } from '../appConfig.js'
 
 // Which tab should read as "current" in the nav — derived straight from
 // the URL rather than passed down as state, so it stays correct on both a
@@ -35,7 +36,7 @@ function Sidebar({ user, onUploaded, onLoggedOut }) {
     <aside className="sidebar">
       <div className="sidebar__title">
         <img src={logo} alt="" className="sidebar__logo" />
-        Research Tool
+        {PRODUCT_NAME}
       </div>
       <div className="sidebar__welcome">
         Welcome, {user.name}

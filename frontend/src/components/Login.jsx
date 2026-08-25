@@ -1,5 +1,6 @@
 import { api } from '../api.js'
 import logo from '../assets/logo.png'
+import { PRODUCT_NAME, CLIENT_DISPLAY_NAME } from '../appConfig.js'
 
 // Shown instead of the whole app when GET /auth/me comes back 401 — see
 // App.jsx. There's nothing to fill in here; signing in is a real
@@ -10,8 +11,8 @@ function Login() {
     <div className="login-screen">
       <div className="login-card">
         <img src={logo} alt="" className="login-card__logo" />
-        <h1>Research Tool</h1>
-        <p>Sign in with your Your Firm Dropbox account to continue.</p>
+        <h1>{PRODUCT_NAME}</h1>
+        <p>Sign in with your {CLIENT_DISPLAY_NAME} Dropbox account to continue.</p>
         <button className="login-card__button" onClick={api.goToLogin}>
           Sign in with Dropbox
         </button>
