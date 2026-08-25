@@ -26,9 +26,10 @@ def test_exchange_suffixed_tickers():
 
 
 def test_lowercase_ticker_is_still_extracted():
-    # Real tickers aren't always uppercase in Dropbox (e.g. the real `zqrx`
-    # folder) — extraction itself doesn't judge case. It's the caller's job
-    # to decide what to do with an unmatched lowercase candidate.
+    # Real tickers aren't always uppercase in Dropbox (e.g. a genuine
+    # lowercase folder name) — extraction itself doesn't judge case. It's
+    # the caller's job to decide what to do with an unmatched lowercase
+    # candidate.
     assert parse_ticker("zqrx Notes.pdf") == "zqrx"
 
 
