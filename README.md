@@ -297,27 +297,6 @@ own chat interface and use the tool's existing Upload button instead —
 that path never requires the AI to touch the file's bytes as generated
 text at all.
 
-**Real files via a local shared folder + local upload tool:** the
-cloud-hosted bridge above always requires base64-encoding a file into a
-tool call, which is unreliable for large real files. As a separate,
-better path for those: both ChatGPT Desktop and Claude Desktop support
-local folder access (write real files directly to disk — confirmed
-working, including for genuine binary files) and local (stdio) MCP
-servers. `local-tools/research_tool_upload_mcp.py` is a small MCP server
-the user runs on his own machine, registered in both apps, exposing one tool
-— `upload_file(local_path, ticker, ...)` — that takes just a local file
-path (never file content) and does a real multipart upload to a plain
-REST endpoint on this same backend (`POST /bridge/<secret>/upload-file`,
-see `_build_upload_router` in `bridge.py`), reusing `save_final`'s exact
-ticker-resolution/typo-guard/audit-log logic. Workflow: the AI writes a
-finished file to the shared folder (reliable, since it's a real local
-file write, not a base64 tool argument), then calls `upload_file` with
-that path and a ticker — no encoding, no size limit, no retyping.
-Verified end-to-end (local MCP client → this backend → real Dropbox Dev
-Sandbox write → downloaded and byte-for-byte matched via SHA-256), plus
-its error paths (missing file, unrecognized ticker). See
-`local-tools/README.md` for setup steps.
-
 **Setup for the user:** generate both secrets
 (`python3 -c "import secrets; print(secrets.token_urlsafe(32))"`), set
 `BRIDGE_CHATGPT_SECRET`/`BRIDGE_CLAUDE_SECRET` on the backend service, then

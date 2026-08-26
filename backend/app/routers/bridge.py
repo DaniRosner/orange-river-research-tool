@@ -24,7 +24,6 @@ short version:
 import base64
 import binascii
 
-from fastapi import APIRouter, Form, UploadFile
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -714,36 +713,6 @@ def _build_server(identity: str) -> MCPServer:
     return server
 
 
-def _build_upload_router(identity: str) -> APIRouter:
-    """A plain REST endpoint (not an MCP tool) for the local upload MCP
-    server (see local-tools/research_tool_upload_mcp.py) to call. Exists
-    because that local server already has a real file's bytes sitting on
-    disk — routing them through here as a normal multipart upload avoids
-    ever re-encoding them as base64/JSON, sidestepping the whole
-    reliability problem the AI-facing base64 path has for large files.
-    Reuses save_final's exact ticker-resolution/typo-guard/audit-log
-    logic via _resolve_ticker_for_save/_save_bytes_to_dropbox."""
-    router = APIRouter()
-
-    @router.post("/upload-file")
-    async def upload_file(
-        file: UploadFile,
-        ticker: str = Form(...),
-        new_ticker_status: str | None = Form(None),
-        overwrite: bool = Form(False),
-        confirmed_new_ticker: bool = Form(False),
-    ) -> dict:
-        resolved = _resolve_ticker_for_save(identity, ticker, new_ticker_status, confirmed_new_ticker)
-        if isinstance(resolved, dict):
-            return resolved
-        real_ticker, target_status = resolved
-
-        file_bytes = await file.read()
-        return _save_bytes_to_dropbox(identity, real_ticker, target_status, file.filename, file_bytes, overwrite)
-
-    return router
-
-
 chatgpt_server = _build_server("chatgpt")
 claude_server = _build_server("claude")
 chatgpt_test_server = _build_server("chatgpt_test")
@@ -753,8 +722,3 @@ chatgpt_app = chatgpt_server.streamable_http_app(transport_security=_security)
 claude_app = claude_server.streamable_http_app(transport_security=_security)
 chatgpt_test_app = chatgpt_test_server.streamable_http_app(transport_security=_security)
 claude_test_app = claude_test_server.streamable_http_app(transport_security=_security)
-
-chatgpt_upload_router = _build_upload_router("chatgpt")
-claude_upload_router = _build_upload_router("claude")
-chatgpt_test_upload_router = _build_upload_router("chatgpt_test")
-claude_test_upload_router = _build_upload_router("claude_test")

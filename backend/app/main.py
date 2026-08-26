@@ -100,19 +100,6 @@ app.include_router(files.router, dependencies=[Depends(current_user)])
 # Deliberately NOT behind Depends(current_user) — these are called by
 # ChatGPT/Claude's own infra, not a signed-in browser session; the
 # URL-embedded secret (see app/config.py) is the auth boundary instead.
-# The plain upload-file routers are registered BEFORE the MCP app mounts
-# below, and must stay that way — Starlette matches routes in
-# registration order, and a Mount() otherwise swallows every request
-# under its prefix (including /upload-file) before it ever reaches these.
-if settings.bridge_chatgpt_secret:
-    app.include_router(bridge.chatgpt_upload_router, prefix=f"/bridge/{settings.bridge_chatgpt_secret}")
-if settings.bridge_claude_secret:
-    app.include_router(bridge.claude_upload_router, prefix=f"/bridge/{settings.bridge_claude_secret}")
-if settings.bridge_chatgpt_test_secret:
-    app.include_router(bridge.chatgpt_test_upload_router, prefix=f"/bridge/{settings.bridge_chatgpt_test_secret}")
-if settings.bridge_claude_test_secret:
-    app.include_router(bridge.claude_test_upload_router, prefix=f"/bridge/{settings.bridge_claude_test_secret}")
-
 if settings.bridge_chatgpt_secret:
     app.mount(f"/bridge/{settings.bridge_chatgpt_secret}", bridge.chatgpt_app)
 if settings.bridge_claude_secret:
