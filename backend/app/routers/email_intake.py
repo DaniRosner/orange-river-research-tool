@@ -137,6 +137,21 @@ def _is_nested_email(attachment: UploadFile) -> bool:
     return content_type == "message/rfc822" or filename.endswith(".eml")
 
 
+_PATH_UNSAFE_RE = re.compile(r"[/\\]")
+
+
+def _sanitize_for_dropbox_path(name: str) -> str:
+    """A real email Subject line can contain "/" (confirmed directly —
+    a forward with subject "Fw: SMRT/Tegus Call with ..." landed as a
+    file named "Tegus Call with ..." *inside* an accidentally-created
+    "Email - Fw: SMRT" folder, since Dropbox's upload API treats any "/"
+    in a path exactly like a real path separator). Filenames built from
+    arbitrary email text need this before ever being joined into a
+    Dropbox path — "\\" is included too, since Windows-style paths in a
+    forwarded subject would hit the same problem."""
+    return _PATH_UNSAFE_RE.sub("-", name)
+
+
 def _resolve_and_file_email(
     subject: str,
     sender: str,
@@ -165,7 +180,7 @@ def _resolve_and_file_email(
     # layout) rather than an AI-drafted memo or a manually uploaded
     # document — otherwise it's indistinguishable from any other PDF
     # sitting in the same folder.
-    base_filename = f"Email - {(subject or 'Forwarded email').strip()[:80]}"
+    base_filename = _sanitize_for_dropbox_path(f"Email - {(subject or 'Forwarded email').strip()[:80]}")
 
     if explicit_resolution and explicit_resolution["kind"] == "matched":
         real_ticker = explicit_resolution["ticker"]
@@ -240,7 +255,15 @@ async def inbound_email(request: Request) -> dict:
     subject = form.get("subject", "")
     sender = form.get("from", "") or form.get("sender", "")
     date_str = _header_value(form.get("message-headers", ""), "Date")
-    body_text = form.get("stripped-text") or form.get("body-plain") or ""
+    # body-plain (the full, unstripped plain-text body) FIRST, not
+    # stripped-text — Mailgun's stripped-text is designed to strip out
+    # quoted/forwarded content, treating it as a signature or an old
+    # reply to trim. That's exactly backwards for this use case: a
+    # forwarded email IS the wanted content, not noise to remove.
+    # Confirmed directly on a real forward: stripped-text left nothing
+    # but the sender's own signature line, body-plain has the real
+    # message.
+    body_text = form.get("body-plain") or form.get("stripped-text") or ""
 
     known = ticker_registry.get_known_tickers()
     # A plus-address tag is always a deliberate choice, same reasoning
@@ -293,7 +316,8 @@ async def inbound_email(request: Request) -> dict:
             )
             saved_attachments.append(nested_filename)
             continue
-        attachment_filename = attachment.filename if real_ticker else f"[{ticker_tag.upper()}] {attachment.filename}"
+        safe_attachment_name = _sanitize_for_dropbox_path(attachment.filename or "attachment")
+        attachment_filename = safe_attachment_name if real_ticker else f"[{ticker_tag.upper()}] {safe_attachment_name}"
         saved_name = dropbox_client.upload_file(f"{folder}/{attachment_filename}", data, overwrite=False)
         saved_attachments.append(saved_name)
 

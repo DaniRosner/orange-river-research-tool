@@ -215,6 +215,16 @@ export const api = {
       method: 'POST',
     })
   },
+  // Renames a single file in place — same folder/subfolder, different
+  // name. relativePath is the file's current containing subfolder, same
+  // convention as moveTickerFile/deleteTickerFile.
+  renameTickerFile: (ticker, filename, newName, relativePath) => {
+    const params = new URLSearchParams({ new_name: newName })
+    if (relativePath) params.set('relative_path', relativePath)
+    return request(`/files/ticker/${encodeURIComponent(ticker)}/${encodeURIComponent(filename)}/rename?${params}`, {
+      method: 'POST',
+    })
+  },
   deleteNeedsReviewFile: (filename) =>
     request(`/files/needs-review/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
   deleteTicker: (ticker) => request(`/tickers/${encodeURIComponent(ticker)}`, { method: 'DELETE' }),

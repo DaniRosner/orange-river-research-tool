@@ -54,6 +54,23 @@ def test_falls_back_to_needs_review_when_nothing_resolves(stub_dropbox_and_activ
     assert filename.startswith("[NOTES]")
 
 
+def test_slash_in_subject_does_not_create_an_unintended_subfolder(stub_dropbox_and_activity):
+    # A real forward landed at "Email - Fw: SMRT/Tegus Call....pdf" —
+    # Dropbox's upload API treats "/" exactly like a real path
+    # separator, so this silently created a folder named "Email - Fw:
+    # SMRT" containing a file named "Tegus Call....pdf", instead of one
+    # flat file at the ticker's root.
+    explicit = {"kind": "matched", "ticker": "ZBQ", "status": "active"}
+    filename, real_ticker, folder = email_intake._resolve_and_file_email(
+        "Fw: ZBQ/Tegus Call with Someone", "a@example.com", "", "body", _KNOWN, explicit, "ZBQ"
+    )
+    assert "/" not in filename
+    uploaded_path = stub_dropbox_and_activity[0]
+    # Exactly one more "/" than the folder itself has — i.e. folder +
+    # one filename, not folder + an extra subfolder + filename.
+    assert uploaded_path.count("/") == folder.count("/") + 1
+
+
 def test_needs_review_filename_uses_ticker_unclear_label_with_no_tag(stub_dropbox_and_activity):
     # Nested .eml attachments pass unresolved_tag=None — there's no typed
     # address tag for an individual attachment inside a batch.

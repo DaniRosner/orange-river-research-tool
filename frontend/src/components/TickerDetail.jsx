@@ -156,6 +156,12 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
   const [moveTargetTicker, setMoveTargetTicker] = useState('')
   const [moveTargetPath, setMoveTargetPath] = useState('')
   const [allTickerNames, setAllTickerNames] = useState(null)
+  // Which single file (if any, identified by fileKey) currently has its
+  // rename input showing, and what's currently typed into it — same
+  // idea as the ticker-level renaming/renameValue pair above, just
+  // per-file instead of per-ticker.
+  const [renamingFile, setRenamingFile] = useState(null)
+  const [renameFileValue, setRenameFileValue] = useState('')
   // Drag-and-drop of a file card onto a subfolder card, both same-ticker
   // (see handleFolderDrop below). `draggingFile` (the fileKey currently
   // being dragged, if any) drives a dimmed look on the source card;
@@ -470,6 +476,33 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
     const targetPath = moveTargetPath.trim()
     setMovingFile(null)
     await moveFileTo(file, targetTicker, targetPath)
+  }
+
+  function openRenameFile(file) {
+    setOpenFileMenu(null)
+    setRenamingFile(fileKey(file))
+    setRenameFileValue(file.name)
+  }
+
+  async function handleRenameFile(file) {
+    const newName = renameFileValue.trim()
+    setRenamingFile(null)
+    if (!newName || newName === file.name) return
+    const previous = files
+    const next = {
+      ...files,
+      files: files.files.map((f) => (fileKey(f) === fileKey(file) ? { ...f, name: newName } : f)),
+    }
+    filesCache[ticker] = next
+    setFiles(next)
+    try {
+      await api.renameTickerFile(ticker, file.name, newName, file.relative_path)
+      setMessage(`"${file.name}" renamed to "${newName}".`)
+    } catch (err) {
+      filesCache[ticker] = previous
+      setFiles(previous)
+      setMessage(`Failed to rename "${file.name}": ${err.message}`)
+    }
   }
 
   // Drag-and-drop is scoped to same-ticker moves only — dropping a file
@@ -791,6 +824,19 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
           </div>
         ) : movingFile === key ? (
           renderMoveDialog(file)
+        ) : renamingFile === key ? (
+          <div className="card__rename">
+            <input
+              type="text"
+              value={renameFileValue}
+              onChange={(e) => setRenameFileValue(e.target.value)}
+              autoFocus
+            />
+            <div className="card__rename-actions">
+              <button onClick={() => handleRenameFile(file)}>Save</button>
+              <button onClick={() => setRenamingFile(null)}>Cancel</button>
+            </div>
+          </div>
         ) : (
           <div className="card__footer">
             <div className="card__footer-text">
@@ -818,6 +864,7 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
               >
                 Open in Dropbox
               </button>
+              <button onClick={() => openRenameFile(file)}>Rename</button>
               <button onClick={() => openMoveDialog(key)}>Move to...</button>
               <button
                 className="danger"
@@ -885,6 +932,24 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
         </div>
       )
     }
+    if (renamingFile === key) {
+      return (
+        <div key={key} className="data-table__row data-table__row--confirm">
+          <div className="card__rename">
+            <input
+              type="text"
+              value={renameFileValue}
+              onChange={(e) => setRenameFileValue(e.target.value)}
+              autoFocus
+            />
+            <div className="card__rename-actions">
+              <button onClick={() => handleRenameFile(file)}>Save</button>
+              <button onClick={() => setRenamingFile(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div
         key={key}
@@ -935,6 +1000,7 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
             >
               Open in Dropbox
             </button>
+            <button onClick={() => openRenameFile(file)}>Rename</button>
             <button onClick={() => openMoveDialog(key)}>Move to...</button>
             <button
               className="danger"

@@ -710,6 +710,48 @@ def move_ticker_file(
     return {"status": "moved", "filename": filename, "target_ticker": target_ticker}
 
 
+@router.post("/ticker/{ticker}/{filename}/rename")
+def rename_ticker_file(
+    ticker: str,
+    filename: str,
+    new_name: str,
+    relative_path: str | None = None,
+    user: dict = Depends(auth.current_user),
+):
+    """
+    Rename a single file in place — same folder/subfolder, just a
+    different name. `new_name` is the complete target filename
+    (extension included); the frontend pre-fills the current extension
+    so a rename UI only really needs to change the base name, but this
+    endpoint itself doesn't special-case the extension — same reasoning
+    as rename_ticker() taking a plain new_name rather than splitting it.
+    `relative_path` is the file's current containing subfolder, same
+    convention as move_ticker_file/delete_ticker_file.
+
+    Auto-renames on a naming conflict rather than failing outright (see
+    dropbox_client.move()) — same behavior a move to a colliding name
+    would have.
+    """
+    if not new_name or not new_name.strip():
+        raise HTTPException(status_code=400, detail="new_name can't be empty")
+
+    known = ticker_registry.get_known_folders()
+    status = known.get(ticker)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    folder = f"{ticker_registry.folder_path_for_status(status)}/{ticker}"
+    if relative_path:
+        folder = f"{folder}/{relative_path}"
+
+    dropbox_client.move(f"{folder}/{filename}", f"{folder}/{new_name}")
+    activity_log.record(
+        user, "renamed", ticker=ticker, filename=new_name, relative_path=relative_path or "",
+        detail=f"from {filename}",
+    )
+    return {"status": "renamed", "old_name": filename, "new_name": new_name}
+
+
 @router.delete("/ticker/{ticker}/{filename}")
 def delete_ticker_file(
     ticker: str, filename: str, relative_path: str | None = None, user: dict = Depends(auth.current_user)
