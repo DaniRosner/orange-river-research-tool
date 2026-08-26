@@ -113,6 +113,11 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
   // name), since that's what's needed to actually delete it anyway.
   const [confirmDeleteFolder, setConfirmDeleteFolder] = useState(null)
   const [openFolderMenu, setOpenFolderMenu] = useState(null)
+  // Which single subfolder (if any, identified the same way as
+  // confirmDeleteFolder — its full path relative to the ticker root)
+  // currently has its rename input showing, and what's typed into it.
+  const [renamingFolder, setRenamingFolder] = useState(null)
+  const [renameFolderValue, setRenameFolderValue] = useState('')
   // Whether the "delete this whole ticker" confirmation is showing.
   const [confirmDeleteTicker, setConfirmDeleteTicker] = useState(false)
   // Whether the rename input is showing, and what's currently typed into
@@ -294,6 +299,52 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
       filesCache[ticker] = previous
       setFiles(previous)
       setMessage(`Failed to delete "${name}": ${err.message}`)
+    }
+  }
+
+  function openRenameFolder(name) {
+    setOpenFolderMenu(null)
+    setRenamingFolder(subfolderPath ? `${subfolderPath}/${name}` : name)
+    setRenameFolderValue(name)
+  }
+
+  // Renames a subfolder sitting directly at whichever level is currently
+  // showing. Unlike a file rename, this also has to update every file and
+  // folder nested inside it — their `relative_path`s all begin with the
+  // old path and need the same prefix swapped in, the same way
+  // handleDeleteFolder has to remove the old prefix rather than just the
+  // folder's own entry.
+  async function handleRenameFolder(name) {
+    const newName = renameFolderValue.trim()
+    setRenamingFolder(null)
+    if (!newName || newName === name) return
+    const path = subfolderPath ? `${subfolderPath}/${name}` : name
+    const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
+    const newPath = parent ? `${parent}/${newName}` : newName
+    const prefix = `${path}/`
+    const newPrefix = `${newPath}/`
+    const previous = files
+    const next = {
+      files: files.files.map((f) =>
+        f.relative_path === path
+          ? { ...f, relative_path: newPath }
+          : f.relative_path.startsWith(prefix)
+            ? { ...f, relative_path: newPrefix + f.relative_path.slice(prefix.length) }
+            : f
+      ),
+      folders: files.folders.map((f) =>
+        f === path ? newPath : f.startsWith(prefix) ? newPrefix + f.slice(prefix.length) : f
+      ),
+    }
+    filesCache[ticker] = next
+    setFiles(next)
+    try {
+      await api.renameSubfolder(ticker, path, newName)
+      setMessage(`"${name}" renamed to "${newName}".`)
+    } catch (err) {
+      filesCache[ticker] = previous
+      setFiles(previous)
+      setMessage(`Failed to rename "${name}": ${err.message}`)
     }
   }
 
@@ -684,6 +735,19 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
             </button>
             <button onClick={() => setConfirmDeleteFolder(null)}>Cancel</button>
           </div>
+        ) : renamingFolder === key ? (
+          <div className="card__rename">
+            <input
+              type="text"
+              value={renameFolderValue}
+              onChange={(e) => setRenameFolderValue(e.target.value)}
+              autoFocus
+            />
+            <div className="card__rename-actions">
+              <button onClick={() => handleRenameFolder(name)}>Save</button>
+              <button onClick={() => setRenamingFolder(null)}>Cancel</button>
+            </div>
+          </div>
         ) : (
           <div className="card__footer">
             <div className="card__footer-text">
@@ -700,6 +764,7 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
               >
                 Select
               </button>
+              <button onClick={() => openRenameFolder(name)}>Rename</button>
               <button
                 className="danger"
                 onClick={() => {
@@ -731,6 +796,24 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
             </button>{' '}
             <button onClick={() => setConfirmDeleteFolder(null)}>Cancel</button>
           </span>
+        </div>
+      )
+    }
+    if (renamingFolder === key) {
+      return (
+        <div key={`folder:${key}`} className="data-table__row data-table__row--confirm">
+          <div className="card__rename">
+            <input
+              type="text"
+              value={renameFolderValue}
+              onChange={(e) => setRenameFolderValue(e.target.value)}
+              autoFocus
+            />
+            <div className="card__rename-actions">
+              <button onClick={() => handleRenameFolder(name)}>Save</button>
+              <button onClick={() => setRenamingFolder(null)}>Cancel</button>
+            </div>
+          </div>
         </div>
       )
     }
@@ -771,6 +854,7 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
             >
               Select
             </button>
+            <button onClick={() => openRenameFolder(name)}>Rename</button>
             <button
               className="danger"
               onClick={() => {

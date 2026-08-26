@@ -84,6 +84,15 @@ export const api = {
     return request(`/files/ticker/${encodeURIComponent(ticker)}/folder?${params}`, { method: 'DELETE' })
   },
 
+  // Renames a subfolder in place — same parent, different name.
+  // `relativePath` is the folder's current full path relative to the
+  // ticker root (same convention as deleteSubfolder); `newName` is just
+  // the folder's own new name, not a full path.
+  renameSubfolder: (ticker, relativePath, newName) => {
+    const params = new URLSearchParams({ relative_path: relativePath, new_name: newName })
+    return request(`/files/ticker/${encodeURIComponent(ticker)}/folder/rename?${params}`, { method: 'POST' })
+  },
+
   // Not a fetch — a plain URL for an <img src>, so the browser handles the
   // request/caching itself. `ticker: null` means the file is still in
   // Needs Review (a different, ticker-less endpoint). The session cookie

@@ -659,6 +659,45 @@ def delete_subfolder(ticker: str, relative_path: str, user: dict = Depends(auth.
     return {"status": "deleted", "relative_path": relative_path}
 
 
+@router.post("/ticker/{ticker}/folder/rename")
+def rename_subfolder(
+    ticker: str, relative_path: str, new_name: str, user: dict = Depends(auth.current_user)
+):
+    """
+    Rename a subfolder in place — same parent, different name. `relative_path`
+    is the subfolder's own current path relative to the ticker root (e.g.
+    "Old Filings", or "Old Filings/2023" for one nested inside that) — same
+    convention as delete_subfolder. `new_name` is just the folder's own new
+    name, not a full path — same reasoning as rename_ticker_file taking a
+    plain new_name rather than a path.
+
+    Auto-renames on a naming conflict rather than failing outright (see
+    dropbox_client.move()) — same behavior a move to a colliding name would
+    have.
+    """
+    if not relative_path:
+        raise HTTPException(status_code=400, detail="relative_path is required.")
+    new_name = new_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="new_name can't be empty.")
+
+    known = ticker_registry.get_known_folders()
+    status = known.get(ticker)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+
+    base = f"{ticker_registry.folder_path_for_status(status)}/{ticker}"
+    parent, _, _old_name = relative_path.rpartition("/")
+    new_relative_path = f"{parent}/{new_name}" if parent else new_name
+
+    dropbox_client.move(f"{base}/{relative_path}", f"{base}/{new_relative_path}")
+    activity_log.record(
+        user, "renamed", ticker=ticker, filename=new_relative_path, relative_path="",
+        detail=f"folder from {relative_path}",
+    )
+    return {"status": "renamed", "old_relative_path": relative_path, "new_relative_path": new_relative_path}
+
+
 @router.post("/ticker/{ticker}/{filename}/move")
 def move_ticker_file(
     ticker: str,
