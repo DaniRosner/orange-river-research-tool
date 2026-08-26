@@ -82,7 +82,7 @@ def test_filename_includes_date_sender_name_and_strips_forward_markers(stub_drop
         explicit,
         "ZBQ",
     )
-    assert filename.startswith("Email - 2026-08-26 - John Smith - Notes on ZBQ")
+    assert filename.startswith("Email - Notes on ZBQ - John Smith - 2026-08-26")
     assert "Fwd" not in filename
     assert "Re:" not in filename
 

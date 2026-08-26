@@ -212,7 +212,7 @@ def _resolve_and_file_email(
     Returns (actual_filename, real_ticker_or_None, folder_it_landed_in).
     """
     pdf_bytes = email_render.render_email_to_pdf(subject, sender, date_str, body_text)
-    # "Email - {date} - {sender} - {subject}" so two emails with the same
+    # "Email - {subject} - {sender} - {date}" so two emails with the same
     # (often generic, e.g. "notes" or "call") subject are still
     # distinguishable at a glance in a folder listing, without needing an
     # AI call to summarize the body — see project memory/discussion on
@@ -225,9 +225,9 @@ def _resolve_and_file_email(
     name_parts = [
         part
         for part in (
-            _format_date_for_filename(date_str),
-            _sender_display_name(sender),
             _clean_subject(subject) or "Forwarded email",
+            _sender_display_name(sender),
+            _format_date_for_filename(date_str),
         )
         if part
     ]
