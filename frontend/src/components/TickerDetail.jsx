@@ -713,6 +713,10 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
         onDragOver={(e) => handleFolderDragOver(e, key)}
         onDragLeave={() => handleFolderDragLeave(key)}
         onDrop={(e) => handleFolderDrop(e, key)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setOpenFolderMenu(key)
+        }}
       >
         <div className="card__preview card__preview--icon" onClick={() => handleOpenFolder(name)}>
           📁
@@ -824,6 +828,10 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
         onDragOver={(e) => handleFolderDragOver(e, key)}
         onDragLeave={() => handleFolderDragLeave(key)}
         onDrop={(e) => handleFolderDrop(e, key)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setOpenFolderMenu(key)
+        }}
       >
         {selectionMode && (
           <span className="data-table__select">
@@ -884,6 +892,10 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
         draggable
         onDragStart={(e) => handleFileDragStart(e, file)}
         onDragEnd={handleFileDragEnd}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setOpenFileMenu(key)
+        }}
       >
         <div className="card__preview" onClick={() => handleOpenFile(file)}>
           <FileThumbnail ticker={ticker} filename={file.name} relativePath={file.relative_path} size="large" />
@@ -1041,6 +1053,10 @@ function TickerDetail({ ticker, status, subfolderPath, onBack, onNavigateToSubfo
         draggable
         onDragStart={(e) => handleFileDragStart(e, file)}
         onDragEnd={handleFileDragEnd}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setOpenFileMenu(key)
+        }}
       >
         {selectionMode && (
           <span className="data-table__select">

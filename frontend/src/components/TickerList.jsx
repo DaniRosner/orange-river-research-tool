@@ -636,6 +636,10 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
         onDragOver={handleCardDragOver}
         onDragLeave={(e) => handleCardDragLeave(ticker, e)}
         onDrop={(e) => handleCardDrop(ticker, e)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setOpenTickerMenu(ticker)
+        }}
       >
         <div
           className={`card__preview ${logoUrl ? 'card__preview--logo' : 'card__preview--monogram'}`}
@@ -744,6 +748,10 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
         onDragOver={handleCardDragOver}
         onDragLeave={(e) => handleCardDragLeave(ticker, e)}
         onDrop={(e) => handleCardDrop(ticker, e)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setOpenTickerMenu(ticker)
+        }}
       >
         {selectionMode && (
           <span className="data-table__select">
@@ -969,7 +977,14 @@ function TickerList({ onSelectTicker, activeTab, onDataChanged, refreshTrigger }
           )}
           <ul>
             {filteredItems.map((filename) => (
-              <li key={filename} className="file-row">
+              <li
+                key={filename}
+                className="file-row"
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setOpenFileMenu(filename)
+                }}
+              >
                 {selectionMode && (
                   <input
                     type="checkbox"
