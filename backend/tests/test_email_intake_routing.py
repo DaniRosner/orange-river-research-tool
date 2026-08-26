@@ -71,6 +71,31 @@ def test_slash_in_subject_does_not_create_an_unintended_subfolder(stub_dropbox_a
     assert uploaded_path.count("/") == folder.count("/") + 1
 
 
+def test_filename_includes_date_sender_name_and_strips_forward_markers(stub_dropbox_and_activity):
+    explicit = {"kind": "matched", "ticker": "ZBQ", "status": "active"}
+    filename, _, _ = email_intake._resolve_and_file_email(
+        "Fwd: Fwd: Re: Notes on ZBQ",
+        "John Smith <john@example.com>",
+        "Tue, 26 Aug 2026 10:15:00 -0400",
+        "body",
+        _KNOWN,
+        explicit,
+        "ZBQ",
+    )
+    assert filename.startswith("Email - 2026-08-26 - John Smith - Notes on ZBQ")
+    assert "Fwd" not in filename
+    assert "Re:" not in filename
+
+
+def test_filename_falls_back_to_email_local_part_when_sender_has_no_display_name(stub_dropbox_and_activity):
+    explicit = {"kind": "matched", "ticker": "ZBQ", "status": "active"}
+    filename, _, _ = email_intake._resolve_and_file_email(
+        "Notes", "john@example.com", "", "body", _KNOWN, explicit, "ZBQ"
+    )
+    assert "john@example.com" not in filename
+    assert "john" in filename
+
+
 def test_needs_review_filename_uses_ticker_unclear_label_with_no_tag(stub_dropbox_and_activity):
     # Nested .eml attachments pass unresolved_tag=None — there's no typed
     # address tag for an individual attachment inside a batch.

@@ -44,6 +44,7 @@ import hmac
 import json
 import logging
 import re
+from email.utils import parseaddr, parsedate_to_datetime
 
 from fastapi import APIRouter, Request
 
@@ -140,6 +141,42 @@ def _is_nested_email(attachment: UploadFile) -> bool:
 _PATH_UNSAFE_RE = re.compile(r"[/\\]")
 
 
+_FORWARD_REPLY_PREFIX_RE = re.compile(r"^\s*(?:(?:fwd|fw|re)\s*:\s*)+", re.IGNORECASE)
+
+
+def _clean_subject(subject: str) -> str:
+    """Strips repeated leading Fwd:/Fw:/Re: markers a forward chain piles
+    on (e.g. "Fwd: Fwd: Re: SMRT notes" -> "SMRT notes") — those say
+    nothing about the email itself, just how many times it's been
+    forwarded, so they make otherwise-different emails harder to tell
+    apart in a folder rather than easier."""
+    return _FORWARD_REPLY_PREFIX_RE.sub("", subject or "").strip()
+
+
+def _sender_display_name(sender: str) -> str:
+    """Just the human name from a From header ("John Smith
+    <john@company.com>" -> "John Smith") — never the email address
+    itself, which is long and not what makes one email distinguishable
+    from another at a glance. Falls back to the address's own local part
+    (before the @) if there's no display name, and to "" (omitted from
+    the filename entirely) if sender is empty/unparseable."""
+    name, address = parseaddr(sender or "")
+    if name:
+        return name
+    return address.split("@", 1)[0] if address else ""
+
+
+def _format_date_for_filename(date_str: str) -> str:
+    """YYYY-MM-DD from a raw email Date header, "" if missing/unparseable
+    — omitted from the filename entirely rather than guessing."""
+    if not date_str:
+        return ""
+    try:
+        return parsedate_to_datetime(date_str).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
+
+
 def _sanitize_for_dropbox_path(name: str) -> str:
     """A real email Subject line can contain "/" (confirmed directly —
     a forward with subject "Fw: SMRT/Tegus Call with ..." landed as a
@@ -175,12 +212,26 @@ def _resolve_and_file_email(
     Returns (actual_filename, real_ticker_or_None, folder_it_landed_in).
     """
     pdf_bytes = email_render.render_email_to_pdf(subject, sender, date_str, body_text)
-    # "Email - " prefix so this is recognizable at a glance as a
-    # forwarded email (this renderer's plain subject/from/date/body
-    # layout) rather than an AI-drafted memo or a manually uploaded
-    # document — otherwise it's indistinguishable from any other PDF
-    # sitting in the same folder.
-    base_filename = _sanitize_for_dropbox_path(f"Email - {(subject or 'Forwarded email').strip()[:80]}")
+    # "Email - {date} - {sender} - {subject}" so two emails with the same
+    # (often generic, e.g. "notes" or "call") subject are still
+    # distinguishable at a glance in a folder listing, without needing an
+    # AI call to summarize the body — see project memory/discussion on
+    # why body-content summarization was ruled out (cost/infra, not
+    # worth it for a filename). Forward/reply markers are stripped from
+    # the subject first (a forward chain's "Fwd: Fwd: Re:" says nothing
+    # about the email itself), and the sender is just their display name,
+    # never the full email address — any piece that's missing/unparseable
+    # is simply omitted rather than leaving an empty "- -" gap.
+    name_parts = [
+        part
+        for part in (
+            _format_date_for_filename(date_str),
+            _sender_display_name(sender),
+            _clean_subject(subject) or "Forwarded email",
+        )
+        if part
+    ]
+    base_filename = _sanitize_for_dropbox_path(f"Email - {' - '.join(name_parts)}"[:140])
 
     if explicit_resolution and explicit_resolution["kind"] == "matched":
         real_ticker = explicit_resolution["ticker"]
