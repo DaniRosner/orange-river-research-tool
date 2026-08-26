@@ -336,7 +336,7 @@ def _do_save_final(
 def _build_server(identity: str) -> MCPServer:
     other = _OTHER[identity]
     server = MCPServer(
-        name=f"research-tool-bridge-{identity}",
+        name=f"bridge-{identity}",
         instructions=(
             "Tools for handing a research report back and forth between ChatGPT and "
             f"Claude on {settings.primary_user_name}'s behalf. This connector is the {_DISPLAY_NAME[identity]} "
@@ -716,7 +716,7 @@ def _build_server(identity: str) -> MCPServer:
 
 def _build_upload_router(identity: str) -> APIRouter:
     """A plain REST endpoint (not an MCP tool) for the local upload MCP
-    server (see local-tools/research-tool_upload_mcp.py) to call. Exists
+    server (see local-tools/research_tool_upload_mcp.py) to call. Exists
     because that local server already has a real file's bytes sitting on
     disk — routing them through here as a normal multipart upload avoids
     ever re-encoding them as base64/JSON, sidestepping the whole

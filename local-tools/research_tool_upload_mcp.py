@@ -20,7 +20,7 @@ base64/JSON step anywhere, so none of the reliability problems apply.
 
 Setup (see README.md in this folder for the full walkthrough):
     Environment variables required:
-      BRIDGE_BASE_URL  - e.g. https://research-tool-backend.up.railway.app
+      BRIDGE_BASE_URL  - e.g. https://your-backend.up.railway.app
       BRIDGE_SECRET     - the SAME per-identity secret already configured
                           as BRIDGE_CHATGPT_SECRET or BRIDGE_CLAUDE_SECRET
                           on the backend (use the matching one for
@@ -29,7 +29,7 @@ Setup (see README.md in this folder for the full walkthrough):
                           with its own secret).
 
 Run directly for a local smoke test: BRIDGE_BASE_URL=... BRIDGE_SECRET=...
-python research-tool_upload_mcp.py
+python research_tool_upload_mcp.py
 """
 
 import os
@@ -44,7 +44,7 @@ SECRET = os.environ.get("BRIDGE_SECRET", "")
 
 if not BASE_URL or not SECRET:
     print(
-        "research-tool_upload_mcp: BRIDGE_BASE_URL and BRIDGE_SECRET must both be set "
+        "research_tool_upload_mcp: BRIDGE_BASE_URL and BRIDGE_SECRET must both be set "
         "as environment variables in this server's MCP config entry.",
         file=sys.stderr,
     )

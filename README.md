@@ -303,7 +303,7 @@ tool call, which is unreliable for large real files. As a separate,
 better path for those: both ChatGPT Desktop and Claude Desktop support
 local folder access (write real files directly to disk — confirmed
 working, including for genuine binary files) and local (stdio) MCP
-servers. `local-tools/research-tool_upload_mcp.py` is a small MCP server
+servers. `local-tools/research_tool_upload_mcp.py` is a small MCP server
 the user runs on his own machine, registered in both apps, exposing one tool
 — `upload_file(local_path, ticker, ...)` — that takes just a local file
 path (never file content) and does a real multipart upload to a plain
