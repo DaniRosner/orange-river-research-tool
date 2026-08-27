@@ -113,6 +113,21 @@ class Settings(BaseSettings):
     # verification, just so this app can report its own intake address
     # back (e.g. in an error/notification email) without hardcoding it.
     mailgun_inbound_domain: str = ""
+    # A verified Mailgun webhook signature only proves the POST hitting
+    # this endpoint genuinely came from Mailgun — it says nothing about
+    # who the original email's actual sender was. Without a separate
+    # check, anyone on the internet who knows (or guesses) a real ticker
+    # address could get arbitrary content auto-filed into the user's
+    # real Dropbox. Comma-separated; each entry is either a bare domain
+    # (matches any sender at that domain, e.g. "orangelp.com") or a full
+    # address (matches that one address exactly, e.g. someone forwarding
+    # from a personal account not on the firm's domain). A sender
+    # matching neither is silently ignored — nothing gets filed, not
+    # even to Needs Review, since an unverified sender's content
+    # shouldn't land in Dropbox at all. Empty means nothing is accepted
+    # (fails closed, not open) — see _is_allowed_sender in
+    # email_intake.py.
+    email_intake_allowed_senders: str = ""
 
     class Config:
         env_file = "../.env"

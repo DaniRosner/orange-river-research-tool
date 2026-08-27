@@ -5,6 +5,24 @@ from app.routers import email_intake
 _KNOWN = {"ZPAX": "active", "ZBQ": "active"}
 
 
+@pytest.mark.parametrize(
+    "allowed_senders,sender,expected",
+    [
+        ("orangelp.com", "Mordy Pluchenik <mordy@orangelp.com>", True),
+        ("orangelp.com", "anyone@ORANGELP.COM", True),
+        ("orangelp.com,dani@example.com", "Dani <dani@example.com>", True),
+        ("orangelp.com,dani@example.com", "someone.else@example.com", False),
+        ("orangelp.com", "mordy@notorangelp.com", False),
+        ("", "mordy@orangelp.com", False),
+        ("orangelp.com", "", False),
+        ("orangelp.com", "not-an-email", False),
+    ],
+)
+def test_is_allowed_sender(monkeypatch, allowed_senders, sender, expected):
+    monkeypatch.setattr(email_intake.settings, "email_intake_allowed_senders", allowed_senders)
+    assert email_intake._is_allowed_sender(sender) is expected
+
+
 @pytest.fixture(autouse=True)
 def stub_dropbox_and_activity(monkeypatch):
     """_resolve_and_file_email's own logic (which of three paths it takes

@@ -125,6 +125,28 @@ def _ticker_tag_from_recipient(recipient: str) -> str | None:
     return local_part or None
 
 
+def _is_allowed_sender(sender: str) -> bool:
+    """True if `sender`'s address matches settings.email_intake_allowed_senders
+    — a domain entry (no "@") matches any address at that domain, a full
+    address matches exactly. Case-insensitive (email domains/local parts
+    aren't meaningfully case-sensitive in practice). Empty settings value
+    means nothing is accepted (fails closed) — see the config.py comment
+    for why this check exists at all."""
+    _, address = parseaddr(sender or "")
+    address = address.lower()
+    if not address or "@" not in address:
+        return False
+    domain = address.split("@", 1)[1]
+    allowed = [entry.strip().lower() for entry in settings.email_intake_allowed_senders.split(",") if entry.strip()]
+    for entry in allowed:
+        if "@" in entry:
+            if address == entry:
+                return True
+        elif domain == entry:
+            return True
+    return False
+
+
 def _is_nested_email(attachment: UploadFile) -> bool:
     """True for an attachment that is itself a whole email — Gmail/
     Outlook's "Forward as attachment" on a batch of selected messages
@@ -297,6 +319,17 @@ async def inbound_email(request: Request) -> dict:
         logger.warning("Email intake: rejected a webhook POST with an invalid/missing Mailgun signature.")
         return {"status": "rejected", "reason": "invalid signature"}
 
+    # A verified Mailgun signature only proves the POST came from Mailgun,
+    # not that the original email's sender is anyone the user actually
+    # wants filing things into his real Dropbox — see config.py's
+    # email_intake_allowed_senders comment. Checked before any ticker
+    # routing, since an unauthorized sender's content shouldn't be
+    # processed at all, not even filed to Needs Review.
+    sender = form.get("from", "") or form.get("sender", "")
+    if not _is_allowed_sender(sender):
+        logger.warning("Email intake: rejected an email from an unauthorized sender %r.", sender)
+        return {"status": "rejected", "reason": "unauthorized sender"}
+
     recipient = form.get("recipient", "")
     ticker_tag = _ticker_tag_from_recipient(recipient)
     if not ticker_tag:
@@ -304,7 +337,6 @@ async def inbound_email(request: Request) -> dict:
         return {"status": "ignored", "reason": "no ticker tag on recipient"}
 
     subject = form.get("subject", "")
-    sender = form.get("from", "") or form.get("sender", "")
     date_str = _header_value(form.get("message-headers", ""), "Date")
     # body-plain (the full, unstripped plain-text body) FIRST, not
     # stripped-text — Mailgun's stripped-text is designed to strip out
